@@ -1,0 +1,29 @@
+jack   183.42.210.14:53443
+
+jack -> a
+
+callid VUMiBp3Hz1
+fromtag HfJx2Wd5o
+totag 1757927798176-1
+
+a -> jack
+
+callid VUMiBp3Hz1
+fromtag 1757927798176-1
+totag HfJx2Wd5o
+
+
+vc    223.160.230.43:47006
+
+
+b -> vc
+
+callid 5360fce5-1757927787173-e34c1061
+fromtag 1757927787173-3
+totag eX7kMSq
+
+vc -> b
+
+callid 5360fce5-1757927787173-e34c1061
+fromtag eX7kMSq
+totag 1757927787173-3
