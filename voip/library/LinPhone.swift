@@ -43,12 +43,11 @@ class LinPhone{
         var username: String
         var password: String
         var transport: String
-        var logLevel: LogLevel
+        
     }
     var core: Core!
     var coreDelegate: CoreDelegate!
     var version: String!
-    var options: Options!
     var defaultAccount: Account? {
         return self.core.defaultAccount
     }
@@ -71,16 +70,13 @@ class LinPhone{
         return core.currentCall?.outputAudioDevice?.type
     }
 
-    init?(options: Options){
+    init?(logLevel: LogLevel){
         do{
-            self.options = options
-            LoggingService.Instance.logLevel = options.logLevel
+            LoggingService.Instance.logLevel = logLevel
             self.core = try Factory.Instance.createCore(configPath: "", factoryConfigPath: "", systemContext: nil)
-            try self.core.start()
-            self.coreDelegate = LinePhoneDelegate.createDelegate(linPhone: self)
-            self.core.addDelegate(delegate: self.coreDelegate)
-            self.version = Core.getVersion
             
+            self.version = Core.getVersion
+            try self.core.start()
         }
         catch{
             print(error)
@@ -101,7 +97,7 @@ class LinPhone{
         }
     }
 
-    func login() throws{
+    func login(options: Options) throws{
         let transport = self.getTransport(type: options.transport)
         let authInfo = try Factory.Instance.createAuthInfo(username: options.username, userid: nil, passwd: options.password, ha1: nil, realm: nil, domain: options.domain)
         let accountParams = try self.core.createAccountParams()
@@ -232,56 +228,53 @@ class LinPhone{
     
 }
 
-extension Call: Identifiable {
-    public var id: String { self.localTag }
-}
-
 
 
 
 
 class LinPhoneViewModel: ObservableObject {
+    @Published var isInitialized: Bool = false
     @Published var isRegistered: Bool = false
-    @Published var registrationState: String = ""
-    @Published var callState: String = ""
-    @Published var currentCall: Call?
-    @Published var calls: [Call] = []
-    @Published var errorMessage: String?
     @Published var speakerOn: Bool = false
+    @Published var isMicMuted: Bool = false
+    private var linPhone: LinPhone?
+    @Published var errorMessage: String?
 
-    private(set) var linPhone: LinPhone?
-    private var cancellables = Set<AnyCancellable>()
+    @Published var currentCall: Call? = nil
+    @Published var currentCallState: Call.State? = nil
 
-    func setup(options: LinPhone.Options) {
-        linPhone = LinPhone(options: options)
+    init() {
+        linPhone = LinPhone(logLevel: .Error)
         guard let linPhone = linPhone else {
             self.errorMessage = "LinPhone 初始化失败"
             return
         }
+        
         // 监听注册和通话状态
         linPhone.coreDelegate = CoreDelegateStub(
             onCallStateChanged: { [weak self] (core, call, state, message) in
                 DispatchQueue.main.async {
                     print("Call changed: \(call), state: \(state)")
-                    self?.callState = "\(state)"
+                    
                     self?.currentCall = call
-                    self?.calls = linPhone.calls
                 }
             },
             onAccountRegistrationStateChanged: { [weak self] (core, account, state, message) in
                 DispatchQueue.main.async {
-                    self?.registrationState = "\(state)"
+                    print("Account \(account) registration state changed: \(state)")
                     self?.isRegistered = (state == .Ok)
                 }
             }
         )
         linPhone.core.addDelegate(delegate: linPhone.coreDelegate)
+        isInitialized = true
+
     }
 
-    func login() {
+    func login(options:LinPhone.Options) {
         guard let linPhone = linPhone else { return }
         do {
-            try linPhone.login()
+            try linPhone.login(options: options)
         } catch {
             self.errorMessage = "登录失败: \(error)"
         }
@@ -322,6 +315,21 @@ class LinPhoneViewModel: ObservableObject {
         } catch {
             self.errorMessage = "挂断失败: \(error)"
         }
+    }
+
+    func pauseOrResume(call: Call) {
+        guard let linPhone = linPhone else { return }
+        do {
+            try linPhone.pauseOrResume(call: call)
+        } catch {
+            self.errorMessage = "暂停/恢复失败: \(error)"
+        }
+    }
+
+    func toggleMic() {
+        guard let linPhone = linPhone else { return }
+        linPhone.isMicMuted = !linPhone.isMicMuted
+        self.isMicMuted = linPhone.isMicMuted
     }
 
     func toggleSpeaker() {
