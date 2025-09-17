@@ -10,7 +10,7 @@ import linphonesw
 
 struct ContentView: View {
     @StateObject var vm = LinPhoneViewModel()
-    
+    @State private var showError = false
 
     var body: some View {
         Group {
@@ -22,17 +22,55 @@ struct ContentView: View {
                 MainTabView(vm: vm)
             }
         }
-        .frame(minWidth: 400, minHeight: 500)
         .overlay(
             Group {
-                if let call = vm.currentCall {
-                    CallStatusOverlay(call: call, vm: vm)
+                if vm.calls.count > 0 {
+                    CallStatusOverlay(call: vm.currentCall!, vm: vm)
                         .transition(.move(edge: .top).combined(with: .opacity))
                         .zIndex(100)
                 }
             }, alignment: .top
         )
-        //.animation(.easeInOut, value: vm.currentCall)
+        .overlay(
+            Group {
+                if let error = vm.errorMessage, showError {
+                    ToastView(message: error)
+                        .transition(.opacity)
+                        .zIndex(200)
+                }
+            }
+        )
+        .onChange(of: vm.errorMessage) { newValue in
+            if newValue != nil {
+                showError = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    withAnimation {
+                        showError = false
+                    }
+                    // 延迟一点再清理，避免动画冲突
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        vm.clearErrorMessage()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 简单的Toast视图
+struct ToastView: View {
+    let message: String
+    var body: some View {
+        Text(message)
+            .font(.body)
+            .foregroundColor(.white)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+            .background(Color.black.opacity(0.85))
+            .cornerRadius(16)
+            .shadow(radius: 8)
+            .frame(maxWidth: 320)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
 
@@ -90,11 +128,6 @@ struct LoginView: View {
             }
             .disabled(!vm.isInitialized)
             .padding(.horizontal, 32)
-            if let error = vm.errorMessage {
-                Text(error)
-                    .foregroundColor(.red)
-                    .padding(.top, 8)
-            }
             Spacer()
         }
         //.padding()
@@ -110,29 +143,221 @@ struct LoginView: View {
 struct CallStatusOverlay: View {
     let call: Call
     @ObservedObject var vm: LinPhoneViewModel
+    @State private var isSpeakerOn = false
+    @State private var isMuted = false
+    @State private var isRecording = false
+    @State private var callDuration: Int = 0
+    @State private var timer: Timer? = nil
+    @State private var isVideo: Bool = false
+
+    var callState: Call.State? { vm.currentCallState }
+    var isIncoming: Bool { call.dir == .Incoming }
+    var isActive: Bool {
+        callState == .Connected || callState == .StreamsRunning
+    }
+    var isRinging: Bool {
+        callState == .OutgoingInit || callState == .OutgoingProgress || callState == .OutgoingRinging
+    }
+    var canAccept: Bool {
+        callState == .IncomingReceived
+    }
+    var canHangup: Bool {
+        callState != .End && callState != .Released && callState != .Error && callState != .Idle
+    }
+    var canOperate: Bool {
+        isActive
+    }
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text("通话中: \(call.remoteAddress?.asString() ?? "未知")")
-                    .font(.headline)
+        ZStack {
+            if isVideo && isActive {
+                HStack {
+                    VStack {
+                        LinphoneVideoViewHolder() { view in
+                            vm.nativeVideoWindow = view
+                        }
+                        .frame(width: 120, height: 160.0)
+                        .border(Color.gray)
+                        .padding(.leading)
+                        Text("What I receive")
+                    }
+                    Spacer()
+                    VStack {
+                        LinphoneVideoViewHolder() { view in
+                            vm.nativePreviewWindow = view
+                        }
+                        .frame(width: 120, height: 160.0)
+                        .border(Color.gray)
+                        .padding(.leading)
+                        Text("What I send")
+                    }
+                }
+            } else {
+                Color(.systemBackground)
+                    .edgesIgnoringSafeArea(.all)
+            }
+
+            VStack(spacing: 20) {
                 Spacer()
-                Button(action: {
-                    vm.hangup(call: call)
-                }) {
-                    Image(systemName: "phone.down.fill")
+                // 通话信息
+                VStack(spacing: 8) {
+                    Text(titleText())
+                        .font(.headline)
                         .foregroundColor(.white)
-                        .padding(8)
+                    Text(call.remoteAddress?.asString() ?? "未知号码")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                    if isActive {
+                        Text("时长：\(formatDuration(callDuration))")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                }
+                Spacer()
+                // 功能按钮
+                if canOperate {
+                    HStack(spacing: 32) {
+                        Button(action: {
+                            isSpeakerOn.toggle()
+                            vm.setSpeaker(on: isSpeakerOn)
+                        }) {
+                            Image(systemName: isSpeakerOn ? "speaker.wave.3.fill" : "speaker.wave.2")
+                                .font(.system(size: 28))
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.blue.opacity(0.7))
+                                .clipShape(Circle())
+                        }
+                        Button(action: {
+                            isMuted.toggle()
+                            vm.setMuted(muted: isMuted)
+                        }) {
+                            Image(systemName: isMuted ? "mic.slash.fill" : "mic.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.orange.opacity(0.7))
+                                .clipShape(Circle())
+                        }
+                        Button(action: {
+                            isRecording.toggle()
+                            if isRecording {
+                                vm.startRecording()
+                            } else {
+                                vm.stopRecording()
+                            }
+                        }) {
+                            Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
+                                .font(.system(size: 28))
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.red.opacity(0.7))
+                                .clipShape(Circle())
+                        }
+                        Button(action: {
+                            // 切换为视频
+                        }) {
+                            Image(systemName: "video.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.purple.opacity(0.7))
+                                .clipShape(Circle())
+                        }
+                    }
+                    .padding(.bottom, 40)
+                }
+                // 接听按钮
+                // 在 CallStatusOverlay 的 body 里
+                if canAccept {
+                    // 接听按钮
+                    Button(action: {
+                        vm.accept(call: call)
+                    }) {
+                        HStack {
+                            Image(systemName: "phone.fill.arrow.up.right")
+                            Text("接听")
+                        }
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 10)
+                        .background(Color.green)
+                        .cornerRadius(24)
+                    }
+                    // 拒绝按钮
+                    Button(action: {
+                        vm.hangup(call: call)
+                    }) {
+                        HStack {
+                            Image(systemName: "phone.down.fill")
+                            Text("拒绝")
+                        }
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 10)
                         .background(Color.red)
-                        .clipShape(Circle())
+                        .cornerRadius(24)
+                    }
+                    .padding(.top, 8)
+                } else {
+                    if canHangup {
+                        // 其它状态下只显示挂断按钮
+                        Button(action: {
+                            vm.hangup(call: call)
+                        }) {
+                            Image(systemName: "phone.down.fill")
+                                .font(.system(size: 32))
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.red)
+                                .clipShape(Circle())
+                        }
+                        .padding(.bottom, 40)
+                    }
                 }
             }
             .padding()
-            //.background(BlurView(style: .systemMaterial))
-            .cornerRadius(12)
-            .shadow(radius: 8)
         }
-        .padding()
+        .onAppear {
+            updateVideoState()
+            if isActive { startTimer() }
+        }
+        .onDisappear { stopTimer() }
+        .onChange(of: callState) { _ in
+            updateVideoState()
+            if isActive { startTimer() } else { stopTimer() }
+        }
+    }
+
+    func titleText() -> String {
+        switch callState {
+        case .IncomingReceived: return "来电"
+        case .OutgoingInit, .OutgoingProgress, .OutgoingRinging: return "呼叫中"
+        case .Connected, .StreamsRunning: return "通话中"
+        case .End, .Released, .Error: return "通话结束"
+        default: return "通话"
+        }
+    }
+
+    func updateVideoState() {
+        isVideo = call.params?.videoEnabled ?? false
+    }
+    func startTimer() {
+        stopTimer()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            callDuration = call.duration
+        }
+    }
+    func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+    func formatDuration(_ seconds: Int) -> String {
+        let m = seconds / 60
+        let s = seconds % 60
+        return String(format: "%02d:%02d", m, s)
     }
 }
 
@@ -228,7 +453,7 @@ struct DialPadTabView: View {
                                 .clipShape(Circle())
                         }
                         Button(action: {
-                            vm.call(to: dialNumber)
+                            vm.call(to: "sip:\(dialNumber)@180.97.215.207")
                             dialNumber = ""
                         }) {
                             Image(systemName: "phone.fill")
@@ -281,9 +506,9 @@ struct ContactsView: View {
     @ObservedObject var vm: LinPhoneViewModel
     @State private var contacts: [Contact] = [
         Contact(
-            username: "jack",
-            displayName: "Jack",
-            sipAddress: "sip:jack@180.97.215.207",
+            username: "vc",
+            displayName: "VC",
+            sipAddress: "sip:vc@180.97.215.207",
             phoneNumber: "13800000001",
             status: .online
         ),
@@ -308,59 +533,61 @@ struct ContactsView: View {
         NavigationView {
             VStack {
                 List(contacts, id: \.id) { contact in
-                    HStack(spacing: 12) {
-                        ZStack(alignment: .bottomTrailing) {
-                            Circle()
-                                .fill(Color.blue.opacity(0.2))
-                                .frame(width: 36, height: 36)
-                                .overlay(
-                                    Text(String(contact.displayName.prefix(1)))
-                                        .font(.headline)
-                                        .foregroundColor(.blue)
-                                )
-                            // 在线状态指示
-                            Circle()
-                                .fill(contact.status == .online ? Color.green :
-                                      (contact.status == .offline ? Color.gray : Color.gray.opacity(0.4)))
-                                .frame(width: 10, height: 10)
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.white, lineWidth: 1)
-                                )
-                                .offset(x: 10, y: 10)
+                    NavigationLink(destination: ContactDetailView(contact: contact, vm: vm)) {
+                        HStack(spacing: 12) {
+                            ZStack(alignment: .bottomTrailing) {
+                                Circle()
+                                    .fill(Color.blue.opacity(0.2))
+                                    .frame(width: 36, height: 36)
+                                    .overlay(
+                                        Text(String(contact.displayName.prefix(1)))
+                                            .font(.headline)
+                                            .foregroundColor(.blue)
+                                    )
+                                // 在线状态指示
+                                Circle()
+                                    .fill(contact.status == .online ? Color.green :
+                                        (contact.status == .offline ? Color.gray : Color.gray.opacity(0.4)))
+                                    .frame(width: 10, height: 10)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.white, lineWidth: 1)
+                                    )
+                                    .offset(x: 10, y: 10)
+                            }
+                            VStack(alignment: .leading) {
+                                Text(contact.displayName)
+                                    .font(.headline)
+                                Text(contact.username)
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                            }
+                            Spacer()
+                            // 语音电话按钮
+                            Button(action: {
+                                vm.call(to: contact.sipAddress)
+                            }) {
+                                Image(systemName: "phone.fill")
+                                    .foregroundColor(.green)
+                                    .padding(8)
+                                    .background(Color.green.opacity(0.15))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            // 视频电话按钮
+                            Button(action: {
+                                vm.call(to: contact.sipAddress,video: true)
+                            }) {
+                                Image(systemName: "video.fill")
+                                    .foregroundColor(.blue)
+                                    .padding(8)
+                                    .background(Color.blue.opacity(0.15))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(PlainButtonStyle())
                         }
-                        VStack(alignment: .leading) {
-                            Text(contact.displayName)
-                                .font(.headline)
-                            Text(contact.username)
-                                .font(.subheadline)
-                                .foregroundColor(.gray)
-                        }
-                        Spacer()
-                        // 语音电话按钮
-                        Button(action: {
-                            vm.call(to: contact.sipAddress)
-                        }) {
-                            Image(systemName: "phone.fill")
-                                .foregroundColor(.green)
-                                .padding(8)
-                                .background(Color.green.opacity(0.15))
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        // 视频电话按钮
-                        Button(action: {
-                            vm.call(to: contact.sipAddress)
-                        }) {
-                            Image(systemName: "video.fill")
-                                .foregroundColor(.blue)
-                                .padding(8)
-                                .background(Color.blue.opacity(0.15))
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(PlainButtonStyle())
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
                 }
                 .listStyle(PlainListStyle())
                 .listRowSeparator(.hidden)
@@ -388,6 +615,115 @@ struct ContactsView: View {
                 }
             }
         }
+    }
+}
+
+struct ContactDetailView: View {
+    let contact: Contact
+    @ObservedObject var vm: LinPhoneViewModel
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            // 头像和昵称
+            ZStack(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(Color.blue.opacity(0.2))
+                    .frame(width: 90, height: 90)
+                    .overlay(
+                        Text(String(contact.displayName.prefix(1)))
+                            .font(.system(size: 40, weight: .bold))
+                            .foregroundColor(.blue)
+                    )
+                Circle()
+                    .fill(contact.status == .online ? Color.green :
+                          (contact.status == .offline ? Color.gray : Color.gray.opacity(0.4)))
+                    .frame(width: 16, height: 16)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white, lineWidth: 2)
+                    )
+                    .offset(x: 8, y: 8)
+            }
+            Text(contact.displayName)
+                .font(.title)
+                .fontWeight(.bold)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "person.fill")
+                        .foregroundColor(.blue)
+                    Text("用户名：\(contact.username)")
+                }
+                HStack {
+                    Image(systemName: "envelope")
+                        .foregroundColor(.purple)
+                    Text("SIP地址：\(contact.sipAddress)")
+                }
+                HStack {
+                    Image(systemName: "phone.fill")
+                        .foregroundColor(.orange)
+                    Text("手机号：\(contact.phoneNumber)")
+                }
+                HStack {
+                    Image(systemName: "circle.fill")
+                        .foregroundColor(contact.status == .online ? .green : .gray)
+                        .font(.system(size: 12))
+                    Text(contact.status == .online ? "在线" : (contact.status == .offline ? "离线" : "未知"))
+                        .foregroundColor(.gray)
+                        .font(.subheadline)
+                }
+            }
+            .font(.body)
+            .padding(.horizontal, 24)
+
+            Spacer()
+            // 操作按钮
+            HStack(spacing: 32) {
+                Button(action: { vm.call(to: contact.sipAddress) }) {
+                    VStack {
+                        Image(systemName: "phone.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.green)
+                            .clipShape(Circle())
+                        Text("语音通话")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                }
+                Button(action: { vm.call(to: contact.sipAddress, video: true) }) {
+                    VStack {
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                        Text("视频通话")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
+                Button(action: { vm.sendMessage(to: contact.sipAddress, message: "Hello") }) {
+                    VStack {
+                        Image(systemName: "message.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.orange)
+                            .clipShape(Circle())
+                        Text("发信息")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+            Spacer()
+        }
+        .padding()
+        .navigationTitle("联系人详情")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

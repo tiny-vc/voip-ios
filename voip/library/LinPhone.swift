@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import linphonesw
+import UIKit
 
 class LinePhoneDelegate {
     static func createDelegate(linPhone: LinPhone)->CoreDelegate{
@@ -34,9 +35,22 @@ class LinePhoneDelegate {
 }
 
 
+
+
+
+
 class LinPhone{
 
-
+    static let instanceIdKey = "linphone_instance_id"
+    static func getOrCreateInstanceId() -> String {
+        if let id = UserDefaults.standard.string(forKey: instanceIdKey) {
+            return id
+        } else {
+            let newId = UUID().uuidString.lowercased()
+            UserDefaults.standard.set(newId, forKey: instanceIdKey)
+            return newId
+        }
+    }
 
     struct Options{
         var domain: String
@@ -57,6 +71,7 @@ class LinPhone{
     var calls: [Call] {
         return self.core.calls
     }
+    //need
     var chatRooms: [String: ChatRoom] = [:]
     var isMicMuted: Bool {
         get {
@@ -66,15 +81,32 @@ class LinPhone{
             self.core.micEnabled = newValue
         }
     }
-    var currentSpeakerMode: AudioDevice.Kind? {
-        return core.currentCall?.outputAudioDevice?.type
+  
+    var nativeVideoWindow: UIView? {
+        get{
+            return self.core.nativeVideoWindow
+        }
+        set{
+            self.core.nativeVideoWindow = newValue
+        }
+    }
+    
+    var nativePreviewWindow: UIView? {
+        get{
+            return self.core.nativePreviewWindow
+        }
+        set{
+            self.core.nativePreviewWindow = newValue
+        }
     }
 
     init?(logLevel: LogLevel){
         do{
             LoggingService.Instance.logLevel = logLevel
             self.core = try Factory.Instance.createCore(configPath: "", factoryConfigPath: "", systemContext: nil)
-            
+            self.core.videoCaptureEnabled = true
+            self.core.videoDisplayEnabled = true
+            self.core.videoActivationPolicy!.automaticallyAccept = true
             self.version = Core.getVersion
             try self.core.start()
         }
@@ -107,10 +139,14 @@ class LinPhone{
         try address.setTransport(newValue: transport)
         try accountParams.setServeraddress(newValue: address)
         accountParams.registerEnabled = true
+        accountParams.expires = 300
+        let instanceId = "<urn:uuid:\(LinPhone.getOrCreateInstanceId())>"
+        accountParams.contactParameters = ";+sip.instance=\"\(instanceId)\""
         let account = try self.core.createAccount(params: accountParams)
         self.core.addAuthInfo(info: authInfo)
         try self.core.addAccount(account: account)
         self.core.defaultAccount = account
+    
     }
 
 
@@ -124,11 +160,13 @@ class LinPhone{
     }
 
    //need 
-    func delete() throws {
+    func delete()  {
         if let account = self.defaultAccount {
-            self.core.removeAccount(account: account)
-            //self.core.clearAccounts()
-            self.core.clearAllAuthInfo()
+            if let authinfo=account.findAuthInfo(){
+                self.core.removeAuthInfo(info: authinfo)
+            }
+            //self.core.removeAccount(account: account)
+            
         }
     }
 
@@ -140,38 +178,31 @@ class LinPhone{
         try call.accept()
     }
 
-    func call(to: String) throws {
+    func call(to: String, videoEnabled: Bool) throws {
         let address = try Factory.Instance.createAddress(addr: to)
         let params = try self.core.createCallParams(call: nil)
         params.mediaEncryption = .None
+        params.videoEnabled = videoEnabled
         let _ = try self.core.inviteAddressWithParams(addr: address, params: params)
     }
 
 
-    func pauseOrResume(call: Call) throws {
-        if (call.state != Call.State.Paused && call.state != Call.State.Pausing) {
-            // If our call isn't paused, let's pause it
-            try call.pause()
-        } else if (call.state != Call.State.Resuming) {
-            // Otherwise let's resume it
-            try call.resume()
-        }
+    func pause(call: Call) throws {
+        try call.pause()
 
     }
 
+    func resume(call: Call) throws {
+        try call.resume()
+    }
 
-
-    func toggleSpeaker(){
-        guard let mode = self.currentSpeakerMode else {
-            return
-        }
-        let speakerEnabled = mode != .Speaker
+    func setSpeaker(call: Call, on: Bool) {
         for audioDevice in self.core.audioDevices {
-            if speakerEnabled && audioDevice.type == AudioDevice.Kind.Microphone {
+            if on && audioDevice.type == AudioDevice.Kind.Speaker {
                 self.currentCall?.outputAudioDevice = audioDevice
                 return
             }
-            else if !speakerEnabled && audioDevice.type == AudioDevice.Kind.Speaker {
+            else if !on && audioDevice.type == AudioDevice.Kind.Microphone {
                  self.currentCall?.outputAudioDevice = audioDevice
                  return
             }
@@ -181,6 +212,9 @@ class LinPhone{
         }
     }
 
+    
+
+    //need
     func toggleCamera() throws{
         let currentDevice = self.core.videoDevice
 			
@@ -207,6 +241,10 @@ class LinPhone{
         }
     }
 
+    func deleteChatRoom(to: String) {
+        
+    }
+
     func sendMessage(to: String, message: String) throws {
         if let chatRoom = self.chatRooms[to] {
             let msg = try chatRoom.createMessageFromUtf8(message: message)
@@ -220,9 +258,29 @@ class LinPhone{
         }
     }
 
+    func sendDtmf(call: Call, dtmf: CChar) throws {
+        try call.sendDtmf(dtmf: dtmf)
+    }
 
-    func stop() throws {
+    func sendDtmfs(call: Call, dtmfs: String) throws {
+        try call.sendDtmfs(dtmfs: dtmfs)
+    }
+
+    func startRecording(call: Call)  {
+        call.startRecording()
+    }
+
+    func stopRecording(call: Call)  {
+        call.stopRecording()
+    }
+
+
+    func stop(){
         core.stop()
+    }
+
+    deinit {
+        self.stop()
     }
 
     
@@ -233,20 +291,36 @@ class LinPhone{
 
 
 class LinPhoneViewModel: ObservableObject {
+    private var linPhone: LinPhone?
     @Published var isInitialized: Bool = false
     @Published var isRegistered: Bool = false
-    @Published var speakerOn: Bool = false
-    @Published var isMicMuted: Bool = false
-    private var linPhone: LinPhone?
+    
     @Published var errorMessage: String?
-
+    @Published var calls: [Call] = []
     @Published var currentCall: Call? = nil
     @Published var currentCallState: Call.State? = nil
+
+    var nativeVideoWindow: UIView? {
+        get{
+            return linPhone?.nativeVideoWindow
+        }
+        set{
+            linPhone?.nativeVideoWindow = newValue
+        }
+    }
+    var nativePreviewWindow: UIView? {
+        get{
+            return linPhone?.nativePreviewWindow
+        }
+        set{
+            linPhone?.nativePreviewWindow = newValue
+        }
+    }
 
     init() {
         linPhone = LinPhone(logLevel: .Error)
         guard let linPhone = linPhone else {
-            self.errorMessage = "LinPhone 初始化失败"
+            self.errorMessage = "初始化失败"
             return
         }
         
@@ -254,13 +328,25 @@ class LinPhoneViewModel: ObservableObject {
         linPhone.coreDelegate = CoreDelegateStub(
             onCallStateChanged: { [weak self] (core, call, state, message) in
                 DispatchQueue.main.async {
+                    print("---------------------------------------------------")
                     print("Call changed: \(call), state: \(state)")
-                    
-                    self?.currentCall = call
+                    self?.currentCallState = self?.currentCall?.state
+                    switch state {
+                    case .IncomingReceived, .OutgoingInit:
+                        self?.calls = self?.linPhone?.calls ?? []
+                        self?.currentCall = self?.linPhone?.currentCall
+                        self?.currentCallState = self?.currentCall?.state
+                    case .End, .Released, .Error:
+                        self?.calls = self?.linPhone?.calls ?? []
+                        self?.currentCall = self?.linPhone?.currentCall
+                    default:
+                        break
+                    }
                 }
             },
             onAccountRegistrationStateChanged: { [weak self] (core, account, state, message) in
                 DispatchQueue.main.async {
+                    print("---------------------------------------------------")
                     print("Account \(account) registration state changed: \(state)")
                     self?.isRegistered = (state == .Ok)
                 }
@@ -284,16 +370,17 @@ class LinPhoneViewModel: ObservableObject {
         guard let linPhone = linPhone else { return }
         do {
             try linPhone.logout()
+            try linPhone.delete()
             self.isRegistered = false
         } catch {
             self.errorMessage = "注销失败: \(error)"
         }
     }
 
-    func call(to: String) {
+    func call(to: String, video: Bool = false) {
         guard let linPhone = linPhone else { return }
         do {
-            try linPhone.call(to: to)
+            try linPhone.call(to: to, videoEnabled: video)
         } catch {
             self.errorMessage = "呼叫失败: \(error)"
         }
@@ -317,25 +404,53 @@ class LinPhoneViewModel: ObservableObject {
         }
     }
 
-    func pauseOrResume(call: Call) {
+    func pause(call: Call) {
         guard let linPhone = linPhone else { return }
         do {
-            try linPhone.pauseOrResume(call: call)
+            try linPhone.pause(call: call)
         } catch {
-            self.errorMessage = "暂停/恢复失败: \(error)"
+            self.errorMessage = "保持失败: \(error)"
         }
     }
 
-    func toggleMic() {
+    func resume(call: Call) {
         guard let linPhone = linPhone else { return }
-        linPhone.isMicMuted = !linPhone.isMicMuted
-        self.isMicMuted = linPhone.isMicMuted
+        do {
+            try linPhone.resume(call: call)
+        } catch {
+            self.errorMessage = "恢复失败: \(error)"
+        }
     }
 
-    func toggleSpeaker() {
+
+    func setSpeaker(on: Bool) {
+        if let call = self.currentCall {
+            linPhone?.setSpeaker(call: call, on: on)
+        }
+    }
+
+    func setMuted(muted: Bool) {
         guard let linPhone = linPhone else { return }
-        linPhone.toggleSpeaker()
-        self.speakerOn.toggle()
+        linPhone.isMicMuted = muted
+    }
+
+    func toggleCamera() {
+        guard let linPhone = linPhone else { return }
+        do {
+            try linPhone.toggleCamera()
+        } catch {
+            self.errorMessage = "切换摄像头失败: \(error)"
+        }
+    }
+
+    func startRecording() {
+        guard let linPhone = linPhone, let call = self.currentCall else { return }
+        linPhone.startRecording(call: call)
+    }
+
+    func stopRecording() {
+        guard let linPhone = linPhone, let call = self.currentCall else { return }
+        linPhone.stopRecording(call: call)
     }
 
     func sendMessage(to: String, message: String) {
@@ -347,12 +462,17 @@ class LinPhoneViewModel: ObservableObject {
         }
     }
 
-    func stop() {
-        guard let linPhone = linPhone else { return }
+    func sendDtmf(dtmf: CChar) {
+        guard let linPhone = linPhone, let call = self.currentCall else { return }
         do {
-            try linPhone.stop()
+            try linPhone.sendDtmf(call: call, dtmf: dtmf)
         } catch {
-            self.errorMessage = "停止失败: \(error)"
+            self.errorMessage = "发送DTMF失败: \(error)"
         }
     }
+
+    func clearErrorMessage() {
+        errorMessage = nil
+    }
+
 }
