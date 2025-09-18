@@ -9,6 +9,8 @@ import Foundation
 import Combine
 import linphonesw
 import UIKit
+import AVFoundation
+
 
 class LinePhoneDelegate {
     static func createDelegate(linPhone: LinPhone)->CoreDelegate{
@@ -71,6 +73,9 @@ class LinPhone{
     var calls: [Call] {
         return self.core.calls
     }
+    var callLogs: [CallLog] {
+        return self.core.callLogs
+    }
     //need
     var chatRooms: [String: ChatRoom] = [:]
     var isMicMuted: Bool {
@@ -106,6 +111,7 @@ class LinPhone{
             self.core = try Factory.Instance.createCore(configPath: "", factoryConfigPath: "", systemContext: nil)
             self.core.videoCaptureEnabled = true
             self.core.videoDisplayEnabled = true
+            //self.core.callkitEnabled = true
             self.core.videoActivationPolicy!.automaticallyAccept = true
             self.version = Core.getVersion
             try self.core.start()
@@ -156,16 +162,18 @@ class LinPhone{
             let clonedParams = params?.clone()
             clonedParams?.registerEnabled = false
             account.params = clonedParams
+            if let authinfo=account.findAuthInfo(){
+                self.core.removeAuthInfo(info: authinfo)
+            }
         }
     }
 
-   //need 
     func delete()  {
         if let account = self.defaultAccount {
             if let authinfo=account.findAuthInfo(){
                 self.core.removeAuthInfo(info: authinfo)
             }
-            //self.core.removeAccount(account: account)
+            self.core.removeAccount(account: account)
             
         }
     }
@@ -287,18 +295,53 @@ class LinPhone{
 }
 
 
+class RingPlayer {
+    static let shared = RingPlayer()
+    private var player: AVAudioPlayer?
 
+    private init() {}
+
+    func play() {
+        if let player = player, player.isPlaying {
+            return
+        }
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .mixWithOthers])
+            try session.setActive(true)
+        } catch {
+            print("设置音频会话失败: \(error)")
+        }
+        guard let url = Bundle.main.url(forResource: "ring", withExtension: "mp3") else { return }
+        do {
+            player = try AVAudioPlayer(contentsOf: url)
+            player?.numberOfLoops = -1 // 无限循环
+            player?.play()
+        } catch {
+            print("无法播放铃声: \(error)")
+        }
+    }
+
+    func stop() {
+        player?.stop()
+        player = nil
+    }
+}
 
 
 class LinPhoneViewModel: ObservableObject {
     private var linPhone: LinPhone?
+    public var options: LinPhone.Options?
     @Published var isInitialized: Bool = false
     @Published var isRegistered: Bool = false
     
     @Published var errorMessage: String?
     @Published var calls: [Call] = []
+    @Published var callLogs: [CallLog] = []
     @Published var currentCall: Call? = nil
     @Published var currentCallState: Call.State? = nil
+    @Published var registrationState: RegistrationState? = nil
+
 
     var nativeVideoWindow: UIView? {
         get{
@@ -323,7 +366,9 @@ class LinPhoneViewModel: ObservableObject {
             self.errorMessage = "初始化失败"
             return
         }
-        
+        self.callLogs = linPhone.callLogs
+        print("Linphone version: \(linPhone.version ?? "unknown")")
+        print("Linphone core created")
         // 监听注册和通话状态
         linPhone.coreDelegate = CoreDelegateStub(
             onCallStateChanged: { [weak self] (core, call, state, message) in
@@ -336,9 +381,17 @@ class LinPhoneViewModel: ObservableObject {
                         self?.calls = self?.linPhone?.calls ?? []
                         self?.currentCall = self?.linPhone?.currentCall
                         self?.currentCallState = self?.currentCall?.state
+                        if state == .IncomingReceived {
+                            RingPlayer.shared.play()
+                        }
+                    case .Connected:
+                        RingPlayer.shared.stop()
+
                     case .End, .Released, .Error:
                         self?.calls = self?.linPhone?.calls ?? []
                         self?.currentCall = self?.linPhone?.currentCall
+                        self?.callLogs = self?.linPhone?.callLogs ?? []
+                        RingPlayer.shared.stop()
                     default:
                         break
                     }
@@ -348,7 +401,11 @@ class LinPhoneViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     print("---------------------------------------------------")
                     print("Account \(account) registration state changed: \(state)")
+                    self?.registrationState = state
                     self?.isRegistered = (state == .Ok)
+                    if state == .Failed {
+                        self?.errorMessage = "登录失败: \(message ?? "未知错误")"
+                    }
                 }
             }
         )
@@ -361,6 +418,7 @@ class LinPhoneViewModel: ObservableObject {
         guard let linPhone = linPhone else { return }
         do {
             try linPhone.login(options: options)
+            self.options = options
         } catch {
             self.errorMessage = "登录失败: \(error)"
         }
@@ -370,7 +428,6 @@ class LinPhoneViewModel: ObservableObject {
         guard let linPhone = linPhone else { return }
         do {
             try linPhone.logout()
-            try linPhone.delete()
             self.isRegistered = false
         } catch {
             self.errorMessage = "注销失败: \(error)"

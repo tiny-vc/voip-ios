@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		558360352E7BB66E00E348DA /* Launch Screen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 558360342E7BB66E00E348DA /* Launch Screen.storyboard */; };
+		558360392E7C01D700E348DA /* ring.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 558360382E7C01D700E348DA /* ring.mp3 */; };
 		559C6A542E73E86100D07587 /* LinPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 559C6A532E73E86100D07587 /* LinPhone.swift */; };
 		55A5D6EB2E6EDB2600043664 /* voipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55A5D6EA2E6EDB2600043664 /* voipApp.swift */; };
 		55A5D6ED2E6EDB2600043664 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55A5D6EC2E6EDB2600043664 /* ContentView.swift */; };
@@ -16,6 +18,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		558360342E7BB66E00E348DA /* Launch Screen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = "Launch Screen.storyboard"; sourceTree = "<group>"; };
+		558360362E7BF94D00E348DA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		558360382E7C01D700E348DA /* ring.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = ring.mp3; sourceTree = "<group>"; };
 		559C6A532E73E86100D07587 /* LinPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinPhone.swift; sourceTree = "<group>"; };
 		55A5D6E72E6EDB2600043664 /* voip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = voip.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		55A5D6EA2E6EDB2600043664 /* voipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = voipApp.swift; sourceTree = "<group>"; };
@@ -36,6 +41,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		558360372E7C01C400E348DA /* resources */ = {
+			isa = PBXGroup;
+			children = (
+				558360382E7C01D700E348DA /* ring.mp3 */,
+			);
+			path = resources;
+			sourceTree = "<group>";
+		};
 		558C8BB22E72C9E600031387 /* library */ = {
 			isa = PBXGroup;
 			children = (
@@ -63,11 +76,14 @@
 		55A5D6E92E6EDB2600043664 /* voip */ = {
 			isa = PBXGroup;
 			children = (
+				558360372E7C01C400E348DA /* resources */,
+				558360362E7BF94D00E348DA /* Info.plist */,
 				558C8BB22E72C9E600031387 /* library */,
 				55A5D6EA2E6EDB2600043664 /* voipApp.swift */,
 				55A5D6EC2E6EDB2600043664 /* ContentView.swift */,
 				55A5D6EE2E6EDB2900043664 /* Assets.xcassets */,
 				55A5D6F02E6EDB2900043664 /* Preview Content */,
+				558360342E7BB66E00E348DA /* Launch Screen.storyboard */,
 			);
 			path = voip;
 			sourceTree = "<group>";
@@ -144,7 +160,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				558360352E7BB66E00E348DA /* Launch Screen.storyboard in Resources */,
 				55A5D6F22E6EDB2900043664 /* Preview Assets.xcassets in Resources */,
+				558360392E7C01D700E348DA /* ring.mp3 in Resources */,
 				55A5D6EF2E6EDB2900043664 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -295,12 +313,14 @@
 				DEVELOPMENT_TEAM = 228Y56W4Q5;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = voip/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSCameraUsageDescription = "拨打视频电话";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "拨打语音电话";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = "Launch Screen.storyboard";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -328,12 +348,14 @@
 				DEVELOPMENT_TEAM = 228Y56W4Q5;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = voip/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSCameraUsageDescription = "拨打视频电话";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "拨打语音电话";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = "Launch Screen.storyboard";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
