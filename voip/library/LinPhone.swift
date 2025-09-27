@@ -10,7 +10,7 @@ import Combine
 import linphonesw
 import UIKit
 import AVFoundation
-
+import SQLite
 
 class LinePhoneDelegate {
     static func createDelegate(linPhone: LinPhone)->CoreDelegate{
@@ -77,7 +77,9 @@ class LinPhone{
         return self.core.callLogs
     }
     //need
-    var chatRooms: [String: ChatRoom] = [:]
+    var chatRooms: [ChatRoom] {
+        return self.core.chatRooms
+    }
     var isMicMuted: Bool {
         get {
             return self.core.micEnabled
@@ -105,6 +107,10 @@ class LinPhone{
         }
     }
 
+    var supportedVideoDefinitions: [VideoDefinition] {
+        return Factory.Instance.supportedVideoDefinitions
+    }
+
     init?(logLevel: LogLevel){
         do{
             LoggingService.Instance.logLevel = logLevel
@@ -115,6 +121,14 @@ class LinPhone{
             self.core.videoActivationPolicy!.automaticallyAccept = true
             self.version = Core.getVersion
             try self.core.start()
+
+            let list=self.supportedVideoDefinitions
+            for item in list{
+                //720
+                if(item.name?.contains("720") == true){
+                    self.core.preferredVideoDefinition = item
+                }
+            }
         }
         catch{
             print(error)
@@ -194,6 +208,12 @@ class LinPhone{
         let _ = try self.core.inviteAddressWithParams(addr: address, params: params)
     }
 
+    func toggleCallVideo(call: Call) throws {
+        let params = try self.core.createCallParams(call: call)
+        params.videoEnabled = !call.params!.videoEnabled
+        try call.update(params: params)
+    }
+
 
     func pause(call: Call) throws {
         try call.pause()
@@ -245,15 +265,14 @@ class LinPhone{
         if params.isValid {
             let remote = try Factory.Instance.createAddress(addr: to)
             let chatRoom = try self.core.createChatRoom(params: params, participants: [remote])
-            self.chatRooms[to] = chatRoom
         }
     }
 
-    func deleteChatRoom(to: String) {
+    func deleteChatRoom() {
         
     }
 
-    func sendMessage(to: String, message: String) throws {
+    /*func sendMessage(to: String, message: String) throws {
         if let chatRoom = self.chatRooms[to] {
             let msg = try chatRoom.createMessageFromUtf8(message: message)
             msg.send()
@@ -264,7 +283,7 @@ class LinPhone{
                 msg.send()
             }
         }
-    }
+    }*/
 
     func sendDtmf(call: Call, dtmf: CChar) throws {
         try call.sendDtmf(dtmf: dtmf)
@@ -280,6 +299,10 @@ class LinPhone{
 
     func stopRecording(call: Call)  {
         call.stopRecording()
+    }
+
+    func clearCallLogs() {
+        self.core.clearCallLogs()
     }
 
 
@@ -341,6 +364,9 @@ class LinPhoneViewModel: ObservableObject {
     @Published var currentCall: Call? = nil
     @Published var currentCallState: Call.State? = nil
     @Published var registrationState: RegistrationState? = nil
+
+    private let db = DatabaseManager.shared
+    @Published var contacts: [Contact] = []
 
 
     var nativeVideoWindow: UIView? {
@@ -411,7 +437,44 @@ class LinPhoneViewModel: ObservableObject {
         )
         linPhone.core.addDelegate(delegate: linPhone.coreDelegate)
         isInitialized = true
+        // 初始化时加载联系人
+        loadContacts()
 
+    }
+
+    func loadContacts() {
+        contacts = db.fetchContacts()
+    }
+
+    func findContact(byId id: Int64) -> Contact? {
+        return db.findContact(byId: id)
+    }
+
+    func addContact(_ contact: Contact) {
+        db.addContact(contact)
+        loadContacts()
+    }
+
+    func updateContact(_ contact: Contact) {
+        db.updateContact(contact)
+        loadContacts()
+    }
+
+    func deleteContact(id: Int64) {
+        db.deleteContact(id: id)
+        loadContacts()
+    }
+
+    func saveAccount(username: String, domain: String, password: String, transport: String) {
+        db.saveAccount(username: username, domain: domain, password: password, transport: transport)
+    }
+
+    func loadAccount() -> LocalAccount? {
+        db.loadAccount()
+    }
+
+    func clearAccount() {
+        db.clearAccount()
     }
 
     func login(options:LinPhone.Options) {
@@ -440,6 +503,15 @@ class LinPhoneViewModel: ObservableObject {
             try linPhone.call(to: to, videoEnabled: video)
         } catch {
             self.errorMessage = "呼叫失败: \(error)"
+        }
+    }
+
+    func toggleCallVideo(call: Call) {
+        guard let linPhone = linPhone else { return }
+        do {
+            try linPhone.toggleCallVideo(call: call)
+        } catch {
+            self.errorMessage = "切换视频失败: \(error)"
         }
     }
 
@@ -513,7 +585,7 @@ class LinPhoneViewModel: ObservableObject {
     func sendMessage(to: String, message: String) {
         guard let linPhone = linPhone else { return }
         do {
-            try linPhone.sendMessage(to: to, message: message)
+            //try linPhone.sendMessage(to: to, message: message)
         } catch {
             self.errorMessage = "发送消息失败: \(error)"
         }
@@ -526,6 +598,12 @@ class LinPhoneViewModel: ObservableObject {
         } catch {
             self.errorMessage = "发送DTMF失败: \(error)"
         }
+    }
+
+    func clearCallLogs() {
+        guard let linPhone = linPhone else { return }
+        linPhone.clearCallLogs()
+        self.callLogs = linPhone.callLogs
     }
 
     func clearErrorMessage() {

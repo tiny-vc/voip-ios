@@ -10,11 +10,14 @@
 		558360352E7BB66E00E348DA /* Launch Screen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 558360342E7BB66E00E348DA /* Launch Screen.storyboard */; };
 		558360392E7C01D700E348DA /* ring.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 558360382E7C01D700E348DA /* ring.mp3 */; };
 		559C6A542E73E86100D07587 /* LinPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = 559C6A532E73E86100D07587 /* LinPhone.swift */; };
+		55A1A5162E7E619F00E5D62F /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = 55A1A5152E7E619F00E5D62F /* SQLite */; };
+		55A1A5182E7E63C900E5D62F /* DatabaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55A1A5172E7E63C900E5D62F /* DatabaseManager.swift */; };
 		55A5D6EB2E6EDB2600043664 /* voipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55A5D6EA2E6EDB2600043664 /* voipApp.swift */; };
 		55A5D6ED2E6EDB2600043664 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55A5D6EC2E6EDB2600043664 /* ContentView.swift */; };
 		55A5D6EF2E6EDB2900043664 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 55A5D6EE2E6EDB2900043664 /* Assets.xcassets */; };
 		55A5D6F22E6EDB2900043664 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 55A5D6F12E6EDB2900043664 /* Preview Assets.xcassets */; };
 		55A5D6FA2E6EDBCC00043664 /* linphonesw in Frameworks */ = {isa = PBXBuildFile; productRef = 55A5D6F92E6EDBCC00043664 /* linphonesw */; };
+		55C97E842E87D34E0097E190 /* Http.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C97E832E87D34E0097E190 /* Http.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,11 +25,13 @@
 		558360362E7BF94D00E348DA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		558360382E7C01D700E348DA /* ring.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = ring.mp3; sourceTree = "<group>"; };
 		559C6A532E73E86100D07587 /* LinPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinPhone.swift; sourceTree = "<group>"; };
+		55A1A5172E7E63C900E5D62F /* DatabaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseManager.swift; sourceTree = "<group>"; };
 		55A5D6E72E6EDB2600043664 /* voip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = voip.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		55A5D6EA2E6EDB2600043664 /* voipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = voipApp.swift; sourceTree = "<group>"; };
 		55A5D6EC2E6EDB2600043664 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		55A5D6EE2E6EDB2900043664 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		55A5D6F12E6EDB2900043664 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		55C97E832E87D34E0097E190 /* Http.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Http.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -34,6 +39,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				55A1A5162E7E619F00E5D62F /* SQLite in Frameworks */,
 				55A5D6FA2E6EDBCC00043664 /* linphonesw in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -53,6 +59,8 @@
 			isa = PBXGroup;
 			children = (
 				559C6A532E73E86100D07587 /* LinPhone.swift */,
+				55A1A5172E7E63C900E5D62F /* DatabaseManager.swift */,
+				55C97E832E87D34E0097E190 /* Http.swift */,
 			);
 			path = library;
 			sourceTree = "<group>";
@@ -114,6 +122,7 @@
 			name = voip;
 			packageProductDependencies = (
 				55A5D6F92E6EDBCC00043664 /* linphonesw */,
+				55A1A5152E7E619F00E5D62F /* SQLite */,
 			);
 			productName = voip;
 			productReference = 55A5D6E72E6EDB2600043664 /* voip.app */;
@@ -145,6 +154,7 @@
 			mainGroup = 55A5D6DE2E6EDB2600043664;
 			packageReferences = (
 				55A5D6F82E6EDBCC00043664 /* XCRemoteSwiftPackageReference "linphone-sdk-swift-ios" */,
+				55A1A5142E7E619F00E5D62F /* XCRemoteSwiftPackageReference "SQLite.swift" */,
 			);
 			productRefGroup = 55A5D6E82E6EDB2600043664 /* Products */;
 			projectDirPath = "";
@@ -174,9 +184,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				55A1A5182E7E63C900E5D62F /* DatabaseManager.swift in Sources */,
 				55A5D6ED2E6EDB2600043664 /* ContentView.swift in Sources */,
 				55A5D6EB2E6EDB2600043664 /* voipApp.swift in Sources */,
 				559C6A542E73E86100D07587 /* LinPhone.swift in Sources */,
+				55C97E842E87D34E0097E190 /* Http.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -396,6 +408,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		55A1A5142E7E619F00E5D62F /* XCRemoteSwiftPackageReference "SQLite.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stephencelis/SQLite.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.15.4;
+			};
+		};
 		55A5D6F82E6EDBCC00043664 /* XCRemoteSwiftPackageReference "linphone-sdk-swift-ios" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://gitlab.linphone.org/BC/public/linphone-sdk-swift-ios";
@@ -407,6 +427,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		55A1A5152E7E619F00E5D62F /* SQLite */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 55A1A5142E7E619F00E5D62F /* XCRemoteSwiftPackageReference "SQLite.swift" */;
+			productName = SQLite;
+		};
 		55A5D6F92E6EDBCC00043664 /* linphonesw */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 55A5D6F82E6EDBCC00043664 /* XCRemoteSwiftPackageReference "linphone-sdk-swift-ios" */;
