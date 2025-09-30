@@ -831,6 +831,7 @@ struct AddEditContactView: View {
 struct ContactDetailView: View {
     let contact: Contact
     @ObservedObject var vm: LinPhoneViewModel
+    @State private var showChat = false
 
     var body: some View {
         ScrollView {
@@ -929,7 +930,7 @@ struct ContactDetailView: View {
                                 .foregroundColor(.blue)
                         }
                     }
-                    Button(action: { vm.sendMessage(to: contact.sipAddress, message: "Hello") }) {
+                    Button(action: { showChat = true }) {
                         VStack {
                             Image(systemName: "message.fill")
                                 .font(.system(size: 32))
@@ -943,6 +944,13 @@ struct ContactDetailView: View {
                                 .foregroundColor(.orange)
                         }
                     }
+                    .sheet(isPresented: $showChat) {
+                        if let chatRoom = vm.chatRooms.first(where: { $0.peerAddress?.asString() == contact.sipAddress }) {
+                            ChatDetailView(vm: vm, chatRoom: LinPhoneChatRoom(room: chatRoom))
+                        } else {
+                            Text("暂无聊天记录")
+                        }
+                    }
                 }
                 .padding(.top, 16)
                 Spacer()
@@ -950,6 +958,7 @@ struct ContactDetailView: View {
             .padding(.horizontal, 0)
             .padding(.bottom, 32)
         }
+        
         .background(Color(.systemGroupedBackground))
         .navigationTitle("联系人详情")
         .navigationBarTitleDisplayMode(.inline)
@@ -1073,15 +1082,96 @@ struct CallsView: View {
 
 struct ChatView: View {
     @ObservedObject var vm: LinPhoneViewModel
+
+    // 将 ChatRoom 转为 LinPhoneChatRoom
+    var chatRooms: [LinPhoneChatRoom] {
+        vm.chatRooms.map { LinPhoneChatRoom(room: $0) }
+    }
+
     var body: some View {
         NavigationView {
-            VStack {
-                Spacer()
+            List {
+                ForEach(chatRooms, id: \.id) { room in
+                    NavigationLink(destination: ChatDetailView(vm: vm, chatRoom: room)) {
+                        HStack {
+                            Text(room.peerAddress ?? "未知")
+                                .font(.headline)
+                            Spacer()
+                            if let lastMsg = room.lastMessage {
+                                Text(lastMsg.contents.first?.utf8Text ?? "")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                    .lineLimit(1)
+                    
+                                Text(formatTimestamp(room.lastUpdateTime))
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
             }
             .navigationTitle("聊天")
         }
     }
 }
+
+struct ChatDetailView: View {
+    @ObservedObject var vm: LinPhoneViewModel
+    let chatRoom: LinPhoneChatRoom
+    @State private var inputText: String = ""
+
+
+    // 获取全部消息
+    var messages: [ChatMessage] {
+        chatRoom.getMessage()
+    }
+
+    var body: some View {
+        VStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(messages, id: \.callId) { msg in
+                        HStack(alignment: .top) {
+                            if msg.isOutgoing {
+                                Spacer()
+                                Text(msg.text ?? "")
+                                    .padding(10)
+                                    .background(Color.blue.opacity(0.2))
+                                    .cornerRadius(10)
+                                    .foregroundColor(.primary)
+                            } else {
+                                Text(msg.text ?? "")
+                                    .padding(10)
+                                    .background(Color.gray.opacity(0.15))
+                                    .cornerRadius(10)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+            HStack {
+                TextField("输入消息...", text: $inputText)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                Button("发送") {
+                    let to = chatRoom.peerAddress ?? ""
+                    if !inputText.trimmingCharacters(in: .whitespaces).isEmpty && !to.isEmpty {
+                        vm.sendMessage(to: to, message: inputText)
+                        inputText = ""
+                    }
+                }
+                .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding()
+        }
+        .navigationTitle(chatRoom.peerAddress ?? "聊天")
+    }
+}
+
 
 struct SettingsView: View {
     @ObservedObject var vm: LinPhoneViewModel

@@ -12,29 +12,6 @@ import UIKit
 import AVFoundation
 import SQLite
 
-class LinePhoneDelegate {
-    static func createDelegate(linPhone: LinPhone)->CoreDelegate{
-        return CoreDelegateStub(
-            onCallStateChanged: { (core, call, state, message) in
-                print("Call changed: \(call), state: \(state)")
-                // 可以根据 call.callId 或 call.remoteAddress 识别是哪一个 call
-            },
-            onMessageReceived: { (core, room, message) in
-                print("Message received from \(message)")
-                // 处理接收到的消息
-            },
-            onChatRoomStateChanged: { (core, room, state) in
-                print("Chat room state changed: \(room), state: \(state)")
-                // 处理聊天室状态变化
-            },
-            onAccountRegistrationStateChanged: { (core ,account ,state ,message) in
-                print("Account \(account) registration state changed: \(state)")
-                // 处理注册状态变化
-            }
-            
-        )
-    }
-}
 
 
 
@@ -257,7 +234,7 @@ class LinPhone{
 
     
 
-    func createChatRoom(to: String) throws{
+    func createChatRoom(to: String) throws -> ChatRoom{
         let params = try self.core.createConferenceParams(conference: nil)
         params.chatEnabled = true
         params.chatParams?.backend = .Basic
@@ -265,25 +242,37 @@ class LinPhone{
         if params.isValid {
             let remote = try Factory.Instance.createAddress(addr: to)
             let chatRoom = try self.core.createChatRoom(params: params, participants: [remote])
+            return chatRoom
         }
+        throw NSError(domain: "LinPhone", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法创建聊天房间"])
     }
 
-    func deleteChatRoom() {
+    func findChatRoom(to: String) throws -> ChatRoom? {
+        let remoteAddress = try Factory.Instance.createAddress(addr: to)
+        for room in self.chatRooms {
+            if let addr = room.peerAddress, addr.asString() == remoteAddress.asString() {
+                return room
+            }
+        }
+        return nil
+    }
+
+    func deleteChatRoom(room: ChatRoom) {
+        self.core.deleteChatRoom(chatRoom: room)
         
     }
 
-    /*func sendMessage(to: String, message: String) throws {
-        if let chatRoom = self.chatRooms[to] {
-            let msg = try chatRoom.createMessageFromUtf8(message: message)
-            msg.send()
+
+    func sendMessage(to: String, message: String) throws {
+        if let room = try findChatRoom(to: to) {
+            let chatMessage = try room.createMessageFromUtf8(message: message)
+            chatMessage.send()
         } else {
-            try self.createChatRoom(to: to)
-            if let chatRoom = self.chatRooms[to] {
-                let msg = try chatRoom.createMessageFromUtf8(message: message)
-                msg.send()
-            }
+            let room = try createChatRoom(to: to)
+            let chatMessage = try room.createMessageFromUtf8(message: message)
+            chatMessage.send()
         }
-    }*/
+    }
 
     func sendDtmf(call: Call, dtmf: CChar) throws {
         try call.sendDtmf(dtmf: dtmf)
@@ -315,6 +304,80 @@ class LinPhone{
     }
 
     
+}
+
+class LinPhoneChatRoom:Identifiable{
+    var id: String { room.identifier ?? UUID().uuidString }
+    var room: ChatRoom
+    init(room: ChatRoom){
+        self.room = room
+    }
+
+    var creationTime: time_t{
+        //time_t to Date
+        return room.creationTime
+    }
+
+    var lastUpdateTime: time_t{
+        return room.lastUpdateTime
+    }
+
+    var lastMessage: ChatMessage?{
+        return room.lastMessageInHistory
+    }
+
+    var localAddress: String?{
+        return room.localAddress?.asString()
+    }
+
+    var peerAddress: String?{
+        return room.peerAddress?.asString()
+    }
+
+    var state: ChatRoom.State{
+        return room.state
+    }
+
+    var unreadMessagesCount: Int{
+        return room.unreadMessagesCount
+    }
+
+    var unreadMessages: [ChatMessage]{
+        return room.unreadHistory
+    }
+
+    var messagesCount: Int{
+        return room.getHistorySize(filters: UInt(ChatRoom.HistoryFilter.ChatMessage.rawValue))
+    }
+
+
+    func addDelegate(delegate: ChatRoomDelegate){
+        room.addDelegate(delegate: delegate)
+    }
+
+    func deleteMessage(message: ChatMessage){
+        room.deleteMessage(message: message)
+    }
+
+    func getMessage()->[ChatMessage]{
+        let events = room.getHistory(nbMessage: 0, filters: UInt(ChatRoom.HistoryFilter.ChatMessage.rawValue))
+        var messages: [ChatMessage] = []
+        for event in events {
+            if let msg = event as? ChatMessage {
+                messages.append(msg)
+            }
+        }
+        return messages
+    }
+
+    func markAsRead(){
+        room.markAsRead()
+    }
+
+
+    func deleteHistory(){
+        room.deleteHistory()
+    }
 }
 
 
@@ -361,6 +424,7 @@ class LinPhoneViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var calls: [Call] = []
     @Published var callLogs: [CallLog] = []
+    @Published var chatRooms: [ChatRoom] = []
     @Published var currentCall: Call? = nil
     @Published var currentCallState: Call.State? = nil
     @Published var registrationState: RegistrationState? = nil
@@ -393,6 +457,7 @@ class LinPhoneViewModel: ObservableObject {
             return
         }
         self.callLogs = linPhone.callLogs
+        self.chatRooms = linPhone.chatRooms
         print("Linphone version: \(linPhone.version ?? "unknown")")
         print("Linphone core created")
         // 监听注册和通话状态
@@ -421,6 +486,16 @@ class LinPhoneViewModel: ObservableObject {
                     default:
                         break
                     }
+                }
+            },
+            onMessageReceived: { [weak self] (core, room, message) in
+                DispatchQueue.main.async {
+                    self?.chatRooms = self?.linPhone?.chatRooms ?? []
+                }
+            },
+            onChatRoomStateChanged: { [weak self] (core, room, state) in
+                DispatchQueue.main.async {
+                    self?.chatRooms = self?.linPhone?.chatRooms ?? []
                 }
             },
             onAccountRegistrationStateChanged: { [weak self] (core, account, state, message) in
@@ -585,7 +660,7 @@ class LinPhoneViewModel: ObservableObject {
     func sendMessage(to: String, message: String) {
         guard let linPhone = linPhone else { return }
         do {
-            //try linPhone.sendMessage(to: to, message: message)
+            try linPhone.sendMessage(to: to, message: message)
         } catch {
             self.errorMessage = "发送消息失败: \(error)"
         }
