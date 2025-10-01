@@ -7,7 +7,6 @@
 
 import SwiftUI
 import linphonesw
-
 import UIKit
 
 let apiUrl = "http://180.97.215.207:3001"
@@ -277,9 +276,6 @@ struct CallStatusOverlay: View {
             //.padding(.top, 8)
             .padding(.horizontal, 18)
             .frame(maxWidth: .infinity, alignment: .top)
-            // 不要 Spacer()，这样就贴顶了
-
-            // 本地预览画面（右上角悬浮，视频通话时显示）
             if isVideo, isActive {
                 VStack {
                     HStack {
@@ -469,45 +465,182 @@ struct CallStatusOverlay: View {
 }
 
 // DTMF 拨号盘
-struct DtmfPadView: View {
-    let onSend: (CChar) -> Void
-    @Environment(\.presentationMode) var presentationMode
-    let keys: [[String]] = [
+struct DialPadTabView: View {
+    @ObservedObject var vm: LinPhoneViewModel
+    @State private var dialNumber: String = ""
+    @State private var showTextInput = false
+    @State private var textInput = ""
+    @State private var gateways: [GatewayItem] = []
+    @State private var selectedGatewayId: Int? = nil
+    @State private var isLoadingGateway = false
+
+    let dialPadRows: [[String]] = [
         ["1", "2", "3"],
         ["4", "5", "6"],
         ["7", "8", "9"],
         ["*", "0", "#"]
     ]
+
+    var selectedGateway: GatewayItem? {
+        gateways.first(where: { $0.gateway_id == selectedGatewayId })
+    }
+
     var body: some View {
-        VStack(spacing: 18) {
-            Text("发送 DTMF")
-                .font(.headline)
-                .padding(.top, 16)
-            ForEach(keys, id: \.self) { row in
-                HStack(spacing: 28) {
-                    ForEach(row, id: \.self) { key in
-                        Button(action: {
-                            if let char = key.utf8.first {
-                                onSend(CChar(char))
-                            }
-                        }) {
-                            Text(key)
-                                .font(.system(size: 36, weight: .bold, design: .rounded))
-                                .frame(width: 72, height: 72)
-                                .background(Color.blue.opacity(0.12))
-                                .foregroundColor(.primary)
-                                .clipShape(Circle())
+        NavigationView {
+            VStack {
+                // 顶部网关选择
+                HStack {
+                    Text("网关:")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                    Picker("网关", selection: $selectedGatewayId) {
+                        Text("自动").tag(Int?.none)
+                        ForEach(gateways, id: \.gateway_id) { gw in
+                            Text(gw.gateway_name).tag(Int?.some(gw.gateway_id))
                         }
                     }
+                    .pickerStyle(MenuPickerStyle())
+                    .frame(width: 140)
+                    .disabled(isLoadingGateway)
+                    Spacer()
                 }
-            }
-            Button("关闭") {
-                presentationMode.wrappedValue.dismiss()
+                .padding(.horizontal, 24)
+                .padding(.top, 8)
+
+                Spacer()
+                // 显示输入的号码
+                Text(dialNumber)
+                    .font(.system(size: 38, weight: .medium, design: .rounded))
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(16)
+                    .padding(.horizontal, 32)
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
+
+                Spacer()
+                // 拨号键盘
+                VStack(spacing: 18) {
+                    ForEach(dialPadRows, id: \.self) { row in
+                        HStack(spacing: 28) {
+                            ForEach(row, id: \.self) { digit in
+                                Button(action: {
+                                    dialNumber.append(digit)
+                                }) {
+                                    Text(digit)
+                                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                                        .frame(width: 72, height: 72)
+                                        .background(Color.blue.opacity(0.12))
+                                        .foregroundColor(.primary)
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                        }
+                    }
+                    // 操作按钮行
+                    HStack(spacing: 40) {
+                        // 删除
+                        Button(action: {
+                            if !dialNumber.isEmpty {
+                                dialNumber.removeLast()
+                            }
+                        }) {
+                            Image(systemName: "delete.left")
+                                .font(.system(size: 28, weight: .regular))
+                                .frame(width: 60, height: 60)
+                                .background(Color.gray.opacity(0.15))
+                                .foregroundColor(.gray)
+                                .clipShape(Circle())
+                        }
+                        // 文本输入
+                        Button(action: {
+                            showTextInput = true
+                        }) {
+                            Image(systemName: "text.cursor")
+                                .font(.system(size: 24, weight: .regular))
+                                .frame(width: 60, height: 60)
+                                .background(Color.green.opacity(0.15))
+                                .foregroundColor(.green)
+                                .clipShape(Circle())
+                        }
+                        // 拨号
+                        Button(action: {
+                            let target: String
+                            if let gw = selectedGateway {
+                                target = "sip:\(dialNumber)@\(gw.gateway_host)"
+                            } else if let domain = vm.options?.domain {
+                                target = "sip:\(dialNumber)@\(domain)"
+                            } else {
+                                target = dialNumber
+                            }
+                            vm.call(to: target)
+                            dialNumber = ""
+                        }) {
+                            Image(systemName: "phone.fill")
+                                .font(.system(size: 32, weight: .bold))
+                                .frame(width: 60, height: 60)
+                                .background(dialNumber.isEmpty ? Color.gray.opacity(0.15) : Color.green)
+                                .foregroundColor(dialNumber.isEmpty ? .gray : .white)
+                                .clipShape(Circle())
+                        }
+                        .disabled(dialNumber.isEmpty)
+                    }
+                    .padding(.top, 8)
+                }
+                .padding(.bottom, 32)
+                Spacer()
             }
             .padding(.top, 24)
+            .background(Color(.systemBackground))
+            .navigationTitle("拨号键盘")
+            // 弹出文本输入框
+            .alert("输入SIP地址或用户名", isPresented: $showTextInput) {
+                TextField("如 name 或 sip:name@domain", text: $textInput)
+                Button("呼叫") {
+                    var target = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !target.isEmpty {
+                        if !target.contains("@") {
+                            if let gw = selectedGateway {
+                                target = "sip:\(target)@\(gw.gateway_host)"
+                            } else if let domain = vm.options?.domain {
+                                target = "sip:\(target)@\(domain)"
+                            }
+                        }
+                        vm.call(to: target)
+                    }
+                    textInput = ""
+                }
+                Button("取消", role: .cancel) {
+                    textInput = ""
+                }
+            }
+            .onAppear {
+                fetchGateways()
+            }
         }
-        .padding()
-        .background(Color(.systemBackground))
+    }
+
+    func fetchGateways() {
+        isLoadingGateway = true
+        //need 只获取落地
+        HttpClient.shared.post(url: "\(apiUrl)/gateway/list", body: ["page": 1, "limit": 100]) { result in
+            DispatchQueue.main.async {
+                isLoadingGateway = false
+                switch result {
+                case .success(let data):
+                    if let resp = try? JSONDecoder().decode(GatewayListResponse.self, from: data), resp.code == 1 {
+                        gateways = resp.data
+                    } else {
+                        gateways = []
+                    }
+                case .failure(_):
+                    gateways = []
+                }
+            }
+        }
     }
 }
 
@@ -640,7 +773,7 @@ struct DialPadTabView: View {
             .navigationTitle("拨号键盘")
             // 弹出文本输入框
             .alert("输入SIP地址或用户名", isPresented: $showTextInput) {
-                TextField("如 jack 或 sip:jack@domain", text: $textInput)
+                TextField("如 name 或 sip:name@domain", text: $textInput)
                 Button("呼叫") {
                     var target = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !target.isEmpty {
@@ -668,113 +801,201 @@ struct ContactEditAction: Identifiable {
 struct ContactsView: View {
     @ObservedObject var vm: LinPhoneViewModel
     @State private var showAddContact = false
-    @State var editAction: ContactEditAction? = nil
+    @State var editContact: Contact? = nil
     @State private var showDeleteAlert = false
     @State private var deletingContactId: Int64? = nil
+    @State private var selectedSegment = 0
+    @State private var cloudContacts: [Contact] = []
+    @State private var isLoadingCloud = false
+
+    let segments = ["本地联系人", "云端联系人"]
 
     var body: some View {
         NavigationView {
-            List {
-                ForEach(vm.contacts, id: \.id) { contact in
-                    NavigationLink(destination: ContactDetailView(contact: contact, vm: vm)) {
-                        HStack(spacing: 14) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.blue.opacity(0.18))
-                                    .frame(width: 44, height: 44)
-                                Text(String(contact.displayName.prefix(1)))
+            VStack {
+                Picker("联系人类型", selection: $selectedSegment) {
+                    ForEach(0..<segments.count, id: \.self) { idx in
+                        Text(segments[idx])
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+                if selectedSegment == 0 {
+                    // 本地联系人
+                    List {
+                        ForEach(vm.contacts, id: \.id) { contact in
+                            NavigationLink(destination: ContactDetailView(contact: contact, vm: vm)) {
+                                HStack(spacing: 14) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Color.blue.opacity(0.18))
+                                            .frame(width: 44, height: 44)
+                                        Text(String(contact.username.prefix(1)))
+                                            .font(.title2)
+                                            .foregroundColor(.blue)
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(contact.username)
+                                            .font(.headline)
+                                        Text(contact.sipAddress ?? contact.phoneNumber ?? "")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 6)
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    deletingContactId = contact.id
+                                    showDeleteAlert = true
+                                } label: {
+                                    Label("删除", systemImage: "trash")
+                                }
+                                Button {
+                                    editContact = contact
+                                } label: {
+                                    Label("编辑", systemImage: "pencil")
+                                }
+                                .tint(.orange)
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
+                    .alert("确定要删除该联系人吗？", isPresented: $showDeleteAlert) {
+                        Button("删除", role: .destructive) {
+                            if let id = deletingContactId {
+                                vm.deleteContact(id: id)
+                            }
+                            deletingContactId = nil
+                        }
+                        Button("取消", role: .cancel) {}
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button {
+                                showAddContact = true
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
                                     .font(.title2)
                                     .foregroundColor(.blue)
                             }
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(contact.displayName)
-                                    .font(.headline)
-                                Text(contact.sipAddress)
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
+                        }
+                    }
+                    .sheet(isPresented: $showAddContact) {
+                        AddEditContactView(
+                            vm: vm,
+                            contact: nil,
+                            onSave: { newContact in
+                                vm.addContact(newContact)
+                                showAddContact = false
+                            },
+                            onCancel: { showAddContact = false }
+                        )
+                    }
+                    .sheet(item: $editContact) { contact in
+                        AddEditContactView(
+                            vm: vm,
+                            contact: contact,
+                            onSave: { updatedContact in
+                                vm.updateContact(updatedContact)
+                                editContact = nil
+                            },
+                            onCancel: { editContact = nil }
+                        )
+                    }
+                } else {
+                    // 云端联系人
+                    if isLoadingCloud {
+                        ProgressView("加载中...")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        List {
+                            ForEach(cloudContacts, id: \.id) { contact in
+                                NavigationLink(destination: ContactDetailView(contact: contact, vm: vm)) {
+                                    HStack(spacing: 14) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(Color.purple.opacity(0.18))
+                                                .frame(width: 44, height: 44)
+                                            Text(String(contact.username.prefix(1)))
+                                                .font(.title2)
+                                                .foregroundColor(.purple)
+                                        }
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(contact.username)
+                                                .font(.headline)
+                                            Text(contact.sipAddress ?? contact.phoneNumber ?? "")
+                                                .font(.caption)
+                                                .foregroundColor(.gray)
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 6)
+                                }
                             }
-                            Spacer()
                         }
-                        .padding(.vertical, 6)
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            deletingContactId = contact.id
-                            showDeleteAlert = true
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
-                        Button {
-                            editAction = ContactEditAction(contactId: contact.id)
-                            print("编辑联系人ID: \(editAction?.contactId)")
-                        } label: {
-                            Label("编辑", systemImage: "pencil")
-                        }
-                        .tint(.orange)
+                        .listStyle(.plain)
                     }
                 }
             }
-            .listStyle(.plain)
             .navigationTitle("联系人")
-            .alert("确定要删除该联系人吗？", isPresented: $showDeleteAlert) {
-                Button("删除", role: .destructive) {
-                    if let id = deletingContactId {
-                        vm.deleteContact(id: id)
-                    }
-                    deletingContactId = nil
-                }
-                Button("取消", role: .cancel) {}
-            }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showAddContact = true
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title2)
-                            .foregroundColor(.blue)
-                    }
+            .onChange(of: selectedSegment) { idx in
+                if idx == 1 && cloudContacts.isEmpty {
+                    fetchCloudContacts()
                 }
             }
-            // 添加联系人弹窗
-            .sheet(isPresented: $showAddContact) {
-                AddEditContactView(vm: vm, contactId: nil) {
-                    showAddContact = false
+            .onAppear {
+                if selectedSegment == 1 && cloudContacts.isEmpty {
+                    fetchCloudContacts()
                 }
             }
-            // 编辑联系人弹窗
-            .sheet(item: $editAction) { action in
-                AddEditContactView(vm: vm, contactId: action.contactId) {
-                    editAction = nil
-                }
-            }
-            
         }
-        
+    }
+
+    func fetchCloudContacts() {
+        isLoadingCloud = true
+        let params: [String: Any] = ["page": 1, "limit": 100]
+        HttpClient.shared.post(url: "\(apiUrl)/user/list", body: params) { result in
+            DispatchQueue.main.async {
+                isLoadingCloud = false
+                switch result {
+                case .success(let data):
+                    if let resp = try? JSONDecoder().decode(UserListResponse.self, from: data), resp.code == 1 {
+                        cloudContacts = resp.data.map {
+                            Contact(
+                                id: Int64($0.user_id),
+                                username: $0.user_displayname,
+                                sipAddress: "sip:\($0.user_name)@\(vm.options?.domain ?? "")",
+                                phoneNumber: $0.user_phone,
+                                remark: nil
+                            )
+                        }
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "云端联系人加载失败: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 }
 
-struct EditContactView: View {
-    var body: some View {
-        Text("Edit Contact View")
-        .onAppear {
-            print("EditContactView appeared")
-        }
-    }
-    
-}
 
 // 添加/编辑联系人页面
 struct AddEditContactView: View {
     @ObservedObject var vm: LinPhoneViewModel
-    let contactId: Int64?
+    var contact: Contact?
+    var onSave: (Contact) -> Void
+    var onCancel: () -> Void
+
     @State private var username: String = ""
-    @State private var displayName: String = ""
     @State private var sipAddress: String = ""
     @State private var phoneNumber: String = ""
-    var onDismiss: () -> Void
+    @State private var remark: String = ""
 
-    var isEdit: Bool { contactId != nil }
+    var isEdit: Bool { contact != nil }
 
     var body: some View {
         NavigationView {
@@ -782,46 +1003,40 @@ struct AddEditContactView: View {
                 Section(header: Text("基本信息")) {
                     TextField("用户名", text: $username)
                         .textInputAutocapitalization(.never)
-                    TextField("昵称", text: $displayName)
                     TextField("SIP地址", text: $sipAddress)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.emailAddress)
                     TextField("手机号", text: $phoneNumber)
                         .keyboardType(.phonePad)
+                    TextField("备注", text: $remark)
                 }
             }
             .navigationTitle(isEdit ? "编辑联系人" : "添加联系人")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { onDismiss() }
+                    Button("取消") { onCancel() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isEdit ? "保存" : "添加") {
                         let newContact = Contact(
-                            id: contactId ?? 0,
+                            id: contact?.id ?? 0,
                             username: username,
-                            displayName: displayName.isEmpty ? username : displayName,
-                            sipAddress: sipAddress,
-                            phoneNumber: phoneNumber
+                            sipAddress: sipAddress.isEmpty ? nil : sipAddress,
+                            phoneNumber: phoneNumber.isEmpty ? nil : phoneNumber,
+                            remark: remark.isEmpty ? nil : remark
                         )
-                        if isEdit {
-                            vm.updateContact(newContact)
-                        } else {
-                            vm.addContact(newContact)
-                        }
-                        onDismiss()
+                        onSave(newContact)
                     }
-                    .disabled(username.isEmpty || sipAddress.isEmpty)
+                    .disabled(username.isEmpty || (sipAddress.isEmpty && phoneNumber.isEmpty))
                 }
             }
             .onAppear {
-                print("编辑联系人ID: \(contactId)")
-                if let id = contactId, let c = vm.findContact(byId: id) {
+                if let c = contact {
                     username = c.username
-                    displayName = c.displayName
-                    sipAddress = c.sipAddress
-                    phoneNumber = c.phoneNumber
+                    sipAddress = c.sipAddress ?? ""
+                    phoneNumber = c.phoneNumber ?? ""
+                    remark = c.remark ?? ""
                 }
             }
         }
@@ -833,6 +1048,18 @@ struct ContactDetailView: View {
     @ObservedObject var vm: LinPhoneViewModel
     @State private var showChat = false
 
+    // 拨号逻辑：优先用 sipAddress，其次用 phoneNumber 拼 sip 地址
+    func callTarget(isVideo: Bool = false) {
+        if let sip = contact.sipAddress, !sip.isEmpty {
+            vm.call(to: sip, video: isVideo)
+        } else if let phone = contact.phoneNumber, !phone.isEmpty, let domain = vm.options?.domain {
+            let target = "sip:\(phone)@\(domain)"
+            vm.call(to: target, video: isVideo)
+        } else {
+            vm.errorMessage = "无有效的拨号地址"
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
@@ -842,11 +1069,11 @@ struct ContactDetailView: View {
                         Circle()
                             .fill(Color.blue.opacity(0.18))
                             .frame(width: 110, height: 110)
-                        Text(String(contact.displayName.prefix(1)))
+                        Text(String(contact.username.prefix(1)))
                             .font(.system(size: 54, weight: .bold))
                             .foregroundColor(.blue)
                     }
-                    Text(contact.displayName)
+                    Text(contact.username)
                         .font(.title)
                         .fontWeight(.bold)
                         .foregroundColor(.primary)
@@ -874,7 +1101,7 @@ struct ContactDetailView: View {
                         Text("SIP地址")
                             .foregroundColor(.gray)
                         Spacer()
-                        Text(contact.sipAddress)
+                        Text(contact.sipAddress ?? "")
                             .fontWeight(.medium)
                             .foregroundColor(.primary)
                             .lineLimit(1)
@@ -887,7 +1114,7 @@ struct ContactDetailView: View {
                         Text("手机号")
                             .foregroundColor(.gray)
                         Spacer()
-                        Text(contact.phoneNumber)
+                        Text(contact.phoneNumber ?? "")
                             .fontWeight(.medium)
                             .foregroundColor(.primary)
                     }
@@ -901,54 +1128,63 @@ struct ContactDetailView: View {
                 .padding(.horizontal, 20)
 
                 // 操作按钮区
-                HStack(spacing: 36) {
-                    Button(action: { vm.call(to: contact.sipAddress) }) {
+                HStack(spacing: 24) {
+                    Button(action: { callTarget(isVideo: false) }) {
                         VStack {
                             Image(systemName: "phone.fill")
-                                .font(.system(size: 32))
+                                .font(.system(size: 22))
                                 .foregroundColor(.white)
-                                .padding()
+                                .padding(14)
                                 .background(Color.green)
                                 .clipShape(Circle())
-                                .shadow(color: Color.green.opacity(0.3), radius: 6, x: 0, y: 2)
+                                .shadow(color: Color.green.opacity(0.3), radius: 4, x: 0, y: 2)
                             Text("语音通话")
                                 .font(.caption)
                                 .foregroundColor(.green)
                         }
                     }
-                    Button(action: { vm.call(to: contact.sipAddress, video: true) }) {
+                    .disabled((contact.sipAddress?.isEmpty ?? true) && (contact.phoneNumber?.isEmpty ?? true))
+
+                    Button(action: { callTarget(isVideo: true) }) {
                         VStack {
                             Image(systemName: "video.fill")
-                                .font(.system(size: 32))
+                                .font(.system(size: 22))
                                 .foregroundColor(.white)
-                                .padding()
+                                .padding(14)
                                 .background(Color.blue)
                                 .clipShape(Circle())
-                                .shadow(color: Color.blue.opacity(0.3), radius: 6, x: 0, y: 2)
+                                .shadow(color: Color.blue.opacity(0.3), radius: 4, x: 0, y: 2)
                             Text("视频通话")
                                 .font(.caption)
                                 .foregroundColor(.blue)
                         }
                     }
+                    .disabled(contact.sipAddress?.isEmpty ?? true) // 只有有sip地址才能视频
+
                     Button(action: { showChat = true }) {
                         VStack {
                             Image(systemName: "message.fill")
-                                .font(.system(size: 32))
+                                .font(.system(size: 22))
                                 .foregroundColor(.white)
-                                .padding()
+                                .padding(14)
                                 .background(Color.orange)
                                 .clipShape(Circle())
-                                .shadow(color: Color.orange.opacity(0.3), radius: 6, x: 0, y: 2)
+                                .shadow(color: Color.orange.opacity(0.3), radius: 4, x: 0, y: 2)
                             Text("发信息")
                                 .font(.caption)
                                 .foregroundColor(.orange)
                         }
                     }
+                    .disabled(contact.sipAddress?.isEmpty ?? true) // 只有有sip地址才能发消息
                     .sheet(isPresented: $showChat) {
-                        if let chatRoom = vm.chatRooms.first(where: { $0.peerAddress?.asString() == contact.sipAddress }) {
-                            ChatDetailView(vm: vm, chatRoom: LinPhoneChatRoom(room: chatRoom))
+                        if let room = vm.chatRooms.first(where: { $0.peerAddress == contact.sipAddress }) {
+                            ChatDetailView(vm: vm, room: room)
                         } else {
-                            Text("暂无聊天记录")
+                            if let room = vm.findChatRoom(peerAddress: contact.sipAddress ?? "") {
+                                ChatDetailView(vm: vm, room: room)
+                            } else {
+                                Text("无法创建聊天房间")
+                            }
                         }
                     }
                 }
@@ -958,7 +1194,6 @@ struct ContactDetailView: View {
             .padding(.horizontal, 0)
             .padding(.bottom, 32)
         }
-        
         .background(Color(.systemGroupedBackground))
         .navigationTitle("联系人详情")
         .navigationBarTitleDisplayMode(.inline)
@@ -1038,9 +1273,6 @@ struct CallsView: View {
                                                 .fill((log.status == .Success ? Color.green : Color.red).opacity(0.12))
                                         )
                                 }
-                                Text("本地: \(log.localAddress?.asString() ?? "-")")
-                                    .font(.caption2)
-                                    .foregroundColor(.gray)
                                 Text("对方: \(log.remoteAddress?.asString() ?? "-")")
                                     .font(.caption2)
                                     .foregroundColor(.gray)
@@ -1080,30 +1312,36 @@ struct CallsView: View {
     }
 }
 
+
 struct ChatView: View {
     @ObservedObject var vm: LinPhoneViewModel
-
-    // 将 ChatRoom 转为 LinPhoneChatRoom
-    var chatRooms: [LinPhoneChatRoom] {
-        vm.chatRooms.map { LinPhoneChatRoom(room: $0) }
-    }
 
     var body: some View {
         NavigationView {
             List {
-                ForEach(chatRooms, id: \.id) { room in
-                    NavigationLink(destination: ChatDetailView(vm: vm, chatRoom: room)) {
-                        HStack {
-                            Text(room.peerAddress ?? "未知")
-                                .font(.headline)
-                            Spacer()
-                            if let lastMsg = room.lastMessage {
-                                Text(lastMsg.contents.first?.utf8Text ?? "")
+                ForEach(vm.chatRooms, id: \.id) { room in
+                    NavigationLink(destination: ChatDetailView(vm: vm, room: room)) {
+                        HStack(spacing: 14) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.orange.opacity(0.18))
+                                    .frame(width: 44, height: 44)
+                                Text(room.peerAddress.prefix(1))
+                                    .font(.title2)
+                                    .foregroundColor(.orange)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(room.peerAddress)
+                                    .font(.headline)
+                                    .foregroundColor(.primary)
+                                Text(room.lastMessage ?? "")
                                     .font(.caption)
                                     .foregroundColor(.gray)
                                     .lineLimit(1)
-                    
-                                Text(formatTimestamp(room.lastUpdateTime))
+                            }
+                            Spacer()
+                            if let lastUpdate = room.lastUpdate {
+                                Text(formatTimestamp(time_t(lastUpdate)))
                                     .font(.caption2)
                                     .foregroundColor(.gray)
                             }
@@ -1112,6 +1350,7 @@ struct ChatView: View {
                     }
                 }
             }
+            .listStyle(.plain)
             .navigationTitle("聊天")
         }
     }
@@ -1119,58 +1358,82 @@ struct ChatView: View {
 
 struct ChatDetailView: View {
     @ObservedObject var vm: LinPhoneViewModel
-    let chatRoom: LinPhoneChatRoom
+    let room: ChatRoomLocal
     @State private var inputText: String = ""
-
-
-    // 获取全部消息
-    var messages: [ChatMessage] {
-        chatRoom.getMessage()
-    }
 
     var body: some View {
         VStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(messages, id: \.callId) { msg in
-                        HStack(alignment: .top) {
+                VStack(spacing: 10) {
+                    ForEach(vm.chatMessages, id: \.id) { msg in
+                        HStack(alignment: .bottom) {
                             if msg.isOutgoing {
                                 Spacer()
-                                Text(msg.text ?? "")
-                                    .padding(10)
-                                    .background(Color.blue.opacity(0.2))
-                                    .cornerRadius(10)
-                                    .foregroundColor(.primary)
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(msg.text)
+                                        .padding(10)
+                                        .background(Color.blue.opacity(0.18))
+                                        .cornerRadius(12)
+                                        .foregroundColor(.primary)
+                                    Text(formatTimestamp(time_t(msg.time)))
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                }
                             } else {
-                                Text(msg.text ?? "")
-                                    .padding(10)
-                                    .background(Color.gray.opacity(0.15))
-                                    .cornerRadius(10)
-                                    .foregroundColor(.primary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(msg.text)
+                                        .padding(10)
+                                        .background(Color.gray.opacity(0.12))
+                                        .cornerRadius(12)
+                                        .foregroundColor(.primary)
+                                    Text(formatTimestamp(time_t(msg.time)))
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                }
                                 Spacer()
                             }
                         }
+                        .padding(.horizontal, 4)
                     }
                 }
-                .padding(.horizontal)
+                .padding(.vertical, 8)
             }
+            .background(Color(.systemGroupedBackground))
             HStack {
                 TextField("输入消息...", text: $inputText)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
-                Button("发送") {
-                    let to = chatRoom.peerAddress ?? ""
+                    .padding(.vertical, 8)
+                Button(action: {
+                    let to = room.peerAddress
                     if !inputText.trimmingCharacters(in: .whitespaces).isEmpty && !to.isEmpty {
                         vm.sendMessage(to: to, message: inputText)
                         inputText = ""
+                        //vm.enterChatRoom(roomId: room.id)
                     }
+                }) {
+                    Image(systemName: "paperplane.fill")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .padding(10)
+                        .background(inputText.trimmingCharacters(in: .whitespaces).isEmpty ? Color.gray : Color.blue)
+                        .clipShape(Circle())
                 }
                 .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding()
+            .padding(.horizontal)
+            .background(Color(.systemBackground))
         }
-        .navigationTitle(chatRoom.peerAddress ?? "聊天")
+        .navigationTitle(room.peerAddress)
+        .background(Color(.systemGroupedBackground))
+        .onAppear {
+            vm.enterChatRoom(roomId: room.id)
+        }
+        .onDisappear {
+            vm.exitChatRoom()
+        }
     }
 }
+
 
 
 struct SettingsView: View {
@@ -1291,6 +1554,7 @@ struct UserItem: Identifiable, Decodable {
     let user_name: String
     let user_password: String
     let user_displayname: String
+    let user_phone: String?
     let user_type: Int // 1=管理员, 2=普通用户
 
     var id: Int { user_id }
@@ -1569,8 +1833,15 @@ struct AddEditUserView: View {
         NavigationView {
             Form {
                 Section(header: Text("用户信息")) {
-                    TextField("账号", text: $userName)
-                        .textInputAutocapitalization(.never)
+                    if isEdit {
+                        // 编辑模式下账号不可修改
+                        TextField("账号", text: $userName)
+                            .disabled(true)
+                            .foregroundColor(.gray)
+                    } else {
+                        TextField("账号", text: $userName)
+                            .textInputAutocapitalization(.never)
+                    }
                     TextField("显示名称", text: $displayName)
                     SecureField("密码", text: $password)
                 }
@@ -1587,7 +1858,9 @@ struct AddEditUserView: View {
                             user_id: user?.user_id ?? 0,
                             user_name: userName,
                             user_password: password,
-                            user_displayname: displayName,
+                            user_displayname: displayName, 
+                            //need
+                            user_phone: nil,
                             user_type: user?.user_type ?? 2
                         )
                         onSave(newUser)
@@ -1619,15 +1892,16 @@ struct AddEditUserView: View {
 struct GatewayItem: Identifiable, Decodable {
     let gateway_id: Int
     let gateway_name: String
-    let gateway_type: Int //1 sip 2 pstn 
+    let gateway_type: Int //1 落地 2 对接 
     let gateway_host: String
     let gateway_port: Int
     let gateway_realm: String
     let gateway_username: String
     let gateway_password: String
-    let gateway_prefix: String
-    let gateway_priority: Int
-    let gateway_remark: String
+    let gateway_prefix: String?
+    let gateway_priority: Int?
+    let gateway_enabled: Int // 1启用 2禁用
+    let gateway_remark: String?
 
     var id: Int { gateway_id }
 }
@@ -1660,16 +1934,28 @@ struct GatewayManagementView: View {
             List {
                 ForEach(gateways) { gateway in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(gateway.gateway_name)
-                            .font(.headline)
-                        Text("类型: \(gateway.gateway_type == 1 ? "SIP" : "PSTN")  地址: \(gateway.gateway_host):\(String(gateway.gateway_port))")
+                        HStack {
+                            Text(gateway.gateway_name)
+                                .font(.headline)
+                            Spacer()
+                            Text(gateway.gateway_enabled == 1 ? "启用" : "禁用")
+                                .font(.caption)
+                                .foregroundColor(gateway.gateway_enabled == 1 ? .green : .red)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill((gateway.gateway_enabled == 1 ? Color.green : Color.red).opacity(0.12))
+                                )
+                        }
+                        Text("类型: \(gateway.gateway_type == 1 ? "落地" : "对接")  地址: \(gateway.gateway_host):\(String(gateway.gateway_port))")
                             .font(.subheadline)
                             .foregroundColor(.gray)
-                        Text("用户名: \(gateway.gateway_username)  优先级: \(gateway.gateway_priority)")
+                        Text("用户名: \(gateway.gateway_username)  优先级: \(gateway.gateway_priority.map { "\($0)" } ?? "-")")
                             .font(.subheadline)
                             .foregroundColor(.gray)
-                        if !gateway.gateway_remark.isEmpty {
-                            Text("备注: \(gateway.gateway_remark)")
+                        if !((gateway.gateway_remark ?? "").isEmpty) {
+                            Text("备注: \(gateway.gateway_remark ?? "")")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -1906,6 +2192,8 @@ struct GatewayManagementView: View {
     }
 }
 
+
+
 // 添加/编辑网关弹窗
 struct AddEditGatewayView: View {
     @ObservedObject var vm: LinPhoneViewModel
@@ -1923,10 +2211,15 @@ struct AddEditGatewayView: View {
     @State private var gatewayPrefix: String = ""
     @State private var gatewayPriority: String = ""
     @State private var gatewayRemark: String = ""
+    @State private var gatewayEnabled: Int = 1 // 默认启用
 
     let gatewayTypeOptions = [
         (name: "SIP网关", value: 1),
         (name: "PSTN网关", value: 2)
+    ]
+    let enabledOptions = [
+        (name: "启用", value: 1),
+        (name: "禁用", value: 2)
     ]
 
     var isEdit: Bool { gateway != nil }
@@ -1947,10 +2240,15 @@ struct AddEditGatewayView: View {
                     TextField("Realm", text: $gatewayRealm)
                     TextField("用户名", text: $gatewayUsername)
                     SecureField("密码", text: $gatewayPassword)
-                    TextField("前缀", text: $gatewayPrefix)
-                    TextField("优先级", text: $gatewayPriority)
+                    TextField("前缀（可选）", text: $gatewayPrefix)
+                    TextField("优先级（可选）", text: $gatewayPriority)
                         .keyboardType(.numberPad)
-                    TextField("备注", text: $gatewayRemark)
+                    Picker("状态", selection: $gatewayEnabled) {
+                        ForEach(enabledOptions, id: \.value) { option in
+                            Text(option.name).tag(option.value)
+                        }
+                    }
+                    TextField("备注（可选）", text: $gatewayRemark)
                 }
             }
             .navigationTitle(isEdit ? "编辑网关" : "添加网关")
@@ -1970,9 +2268,10 @@ struct AddEditGatewayView: View {
                             gateway_realm: gatewayRealm,
                             gateway_username: gatewayUsername,
                             gateway_password: gatewayPassword,
-                            gateway_prefix: gatewayPrefix,
-                            gateway_priority: Int(gatewayPriority) ?? 1,
-                            gateway_remark: gatewayRemark
+                            gateway_prefix: gatewayPrefix.isEmpty ? nil : gatewayPrefix,
+                            gateway_priority: gatewayPriority.isEmpty ? nil : Int(gatewayPriority),
+                            gateway_enabled: gatewayEnabled,
+                            gateway_remark: gatewayRemark.isEmpty ? nil : gatewayRemark
                         )
                         onSave(newGateway)
                     }
@@ -1988,9 +2287,10 @@ struct AddEditGatewayView: View {
                     gatewayRealm = g.gateway_realm
                     gatewayUsername = g.gateway_username
                     gatewayPassword = g.gateway_password
-                    gatewayPrefix = g.gateway_prefix
-                    gatewayPriority = "\(g.gateway_priority)"
-                    gatewayRemark = g.gateway_remark
+                    gatewayPrefix = g.gateway_prefix ?? ""
+                    gatewayPriority = g.gateway_priority.map { "\($0)" } ?? ""
+                    gatewayRemark = g.gateway_remark ?? ""
+                    gatewayEnabled = g.gateway_enabled
                 }
             }
         }
@@ -2005,7 +2305,6 @@ struct AddEditGatewayView: View {
         )
     }
 }
-
 
 struct CallQueryView: View {
     var body: some View {

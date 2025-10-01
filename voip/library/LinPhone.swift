@@ -12,7 +12,70 @@ import UIKit
 import AVFoundation
 import SQLite
 
+import CallKit
 
+class CallKitManager: NSObject, CXProviderDelegate {
+    
+    
+    static let shared = CallKitManager()
+    private let provider: CXProvider
+    private let callController = CXCallController()
+
+    var onAcceptCall: ((UUID) -> Void)?
+    var onEndCall: ((UUID) -> Void)?
+
+    override init() {
+        let config = CXProviderConfiguration(localizedName: "VoIP App")
+        config.supportsVideo = true
+        config.maximumCallsPerCallGroup = 1
+        config.supportedHandleTypes = [.phoneNumber, .generic]
+        config.iconTemplateImageData = nil
+        provider = CXProvider(configuration: config)
+        super.init()
+        provider.setDelegate(self, queue: nil)
+    }
+
+    func reportIncomingCall(uuid: UUID, handle: String, hasVideo: Bool = false, completion: ((Error?) -> Void)? = nil) {
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: handle)
+        update.hasVideo = hasVideo
+        provider.reportNewIncomingCall(with: uuid, update: update, completion: { error in
+            completion?(error)
+        })
+    }
+
+    func endCall(uuid: UUID) {
+        let endCallAction = CXEndCallAction(call: uuid)
+        let transaction = CXTransaction(action: endCallAction)
+        callController.request(transaction) { error in
+            if let error = error {
+                print("End call error: \(error)")
+            }
+        }
+    }
+
+    func providerDidReset(_ provider: CXProvider) {
+        
+    }
+
+    // 必须实现的代理方法
+    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+        // 通知 Linphone 接听
+        onAcceptCall?(action.callUUID)
+        action.fulfill()
+    }
+
+    func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        // 通知 Linphone 挂断
+        onEndCall?(action.callUUID)
+        action.fulfill()
+    }
+
+    func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+        // 通知 Linphone 发起呼叫
+        action.fulfill()
+    }
+}
 
 
 
@@ -53,7 +116,6 @@ class LinPhone{
     var callLogs: [CallLog] {
         return self.core.callLogs
     }
-    //need
     var chatRooms: [ChatRoom] {
         return self.core.chatRooms
     }
@@ -94,7 +156,7 @@ class LinPhone{
             self.core = try Factory.Instance.createCore(configPath: "", factoryConfigPath: "", systemContext: nil)
             self.core.videoCaptureEnabled = true
             self.core.videoDisplayEnabled = true
-            //self.core.callkitEnabled = true
+            self.core.callkitEnabled = true
             self.core.videoActivationPolicy!.automaticallyAccept = true
             self.version = Core.getVersion
             try self.core.start()
@@ -244,6 +306,7 @@ class LinPhone{
             let chatRoom = try self.core.createChatRoom(params: params, participants: [remote])
             return chatRoom
         }
+        //need
         throw NSError(domain: "LinPhone", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法创建聊天房间"])
     }
 
@@ -306,79 +369,6 @@ class LinPhone{
     
 }
 
-class LinPhoneChatRoom:Identifiable{
-    var id: String { room.identifier ?? UUID().uuidString }
-    var room: ChatRoom
-    init(room: ChatRoom){
-        self.room = room
-    }
-
-    var creationTime: time_t{
-        //time_t to Date
-        return room.creationTime
-    }
-
-    var lastUpdateTime: time_t{
-        return room.lastUpdateTime
-    }
-
-    var lastMessage: ChatMessage?{
-        return room.lastMessageInHistory
-    }
-
-    var localAddress: String?{
-        return room.localAddress?.asString()
-    }
-
-    var peerAddress: String?{
-        return room.peerAddress?.asString()
-    }
-
-    var state: ChatRoom.State{
-        return room.state
-    }
-
-    var unreadMessagesCount: Int{
-        return room.unreadMessagesCount
-    }
-
-    var unreadMessages: [ChatMessage]{
-        return room.unreadHistory
-    }
-
-    var messagesCount: Int{
-        return room.getHistorySize(filters: UInt(ChatRoom.HistoryFilter.ChatMessage.rawValue))
-    }
-
-
-    func addDelegate(delegate: ChatRoomDelegate){
-        room.addDelegate(delegate: delegate)
-    }
-
-    func deleteMessage(message: ChatMessage){
-        room.deleteMessage(message: message)
-    }
-
-    func getMessage()->[ChatMessage]{
-        let events = room.getHistory(nbMessage: 0, filters: UInt(ChatRoom.HistoryFilter.ChatMessage.rawValue))
-        var messages: [ChatMessage] = []
-        for event in events {
-            if let msg = event as? ChatMessage {
-                messages.append(msg)
-            }
-        }
-        return messages
-    }
-
-    func markAsRead(){
-        room.markAsRead()
-    }
-
-
-    func deleteHistory(){
-        room.deleteHistory()
-    }
-}
 
 
 class RingPlayer {
@@ -393,7 +383,8 @@ class RingPlayer {
         }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, options: [.defaultToSpeaker, .mixWithOthers])
+            try session.setCategory(.playback, options: [.mixWithOthers])
+            try session.overrideOutputAudioPort(.speaker) // 强制扬声器
             try session.setActive(true)
         } catch {
             print("设置音频会话失败: \(error)")
@@ -424,14 +415,16 @@ class LinPhoneViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var calls: [Call] = []
     @Published var callLogs: [CallLog] = []
-    @Published var chatRooms: [ChatRoom] = []
     @Published var currentCall: Call? = nil
     @Published var currentCallState: Call.State? = nil
     @Published var registrationState: RegistrationState? = nil
 
     private let db = DatabaseManager.shared
     @Published var contacts: [Contact] = []
-
+    @Published var chatRooms: [ChatRoomLocal] = []
+    @Published var currentRoomId: Int64? = nil
+    @Published var chatMessages: [ChatMessageLocal] = []
+    var currentUUID: UUID? = nil
 
     var nativeVideoWindow: UIView? {
         get{
@@ -457,7 +450,8 @@ class LinPhoneViewModel: ObservableObject {
             return
         }
         self.callLogs = linPhone.callLogs
-        self.chatRooms = linPhone.chatRooms
+        
+        
         print("Linphone version: \(linPhone.version ?? "unknown")")
         print("Linphone core created")
         // 监听注册和通话状态
@@ -474,8 +468,12 @@ class LinPhoneViewModel: ObservableObject {
                         self?.currentCallState = self?.currentCall?.state
                         if state == .IncomingReceived {
                             RingPlayer.shared.play()
+                            /*let uuid = UUID()
+                            self?.currentUUID = uuid
+                            CallKitManager.shared.reportIncomingCall(uuid: uuid, handle: call.remoteAddress?.asString() ?? "未知")*/
                         }
                     case .Connected:
+                        break
                         RingPlayer.shared.stop()
 
                     case .End, .Released, .Error:
@@ -483,19 +481,41 @@ class LinPhoneViewModel: ObservableObject {
                         self?.currentCall = self?.linPhone?.currentCall
                         self?.callLogs = self?.linPhone?.callLogs ?? []
                         RingPlayer.shared.stop()
+                        /*if let uuid = self?.currentUUID {
+                            CallKitManager.shared.endCall(uuid: uuid)
+                            self?.currentUUID = nil
+                        }*/
                     default:
                         break
                     }
                 }
             },
             onMessageReceived: { [weak self] (core, room, message) in
+                
                 DispatchQueue.main.async {
-                    self?.chatRooms = self?.linPhone?.chatRooms ?? []
+                    print("---------------------------------------------------")
+                    print("Message received in room: \(room)")
+                    print("Message content: \(message.contents)")
+                    //room.markAsRead()
+                    self?.handleMessage(room: room, message: message)
+                }
+            },
+            onMessageSent: { [weak self] (core, room, message) in
+                DispatchQueue.main.async {
+                    print("---------------------------------------------------")
+                    print("Message sent in room: \(room)")
+                    print("Message content: \(message.contents)")
+                    self?.handleMessage(room: room, message: message)
                 }
             },
             onChatRoomStateChanged: { [weak self] (core, room, state) in
                 DispatchQueue.main.async {
-                    self?.chatRooms = self?.linPhone?.chatRooms ?? []
+                    print("---------------------------------------------------")
+                    print("Chat room state changed: \(room), state: \(state)")
+                    let peer = room.peerAddress?.asString() ?? ""
+                    // 只创建房间，不保存消息
+                    _ = self?.db.findOrCreateChatRoom(peerAddress: peer)
+                    self?.loadChatRooms()
                 }
             },
             onAccountRegistrationStateChanged: { [weak self] (core, account, state, message) in
@@ -514,7 +534,51 @@ class LinPhoneViewModel: ObservableObject {
         isInitialized = true
         // 初始化时加载联系人
         loadContacts()
+        loadChatRooms()
 
+    }
+
+    func loadChatRooms() {
+        chatRooms = db.fetchChatRooms()
+    }
+
+    func findChatRoom(peerAddress: String) -> ChatRoomLocal? {
+        return db.findOrCreateChatRoom(peerAddress: peerAddress)
+    }
+
+    // 加载指定聊天室的消息
+    func loadChatMessages(roomId: Int64) {
+        guard let current = currentRoomId, current == roomId else { return }
+        chatMessages = db.fetchChatMessages(roomId: roomId)
+    }
+
+    // 新增或更新消息和聊天室
+    func saveMessage(peerAddress: String, text: String, time: Int64, isOutgoing: Bool) {
+        // 查找或创建聊天室
+        guard let room = db.findOrCreateChatRoom(peerAddress: peerAddress) else { return }
+        db.addChatMessage(roomId: room.id, text: text, time: time, isOutgoing: isOutgoing)
+        db.updateChatRoomLastMessage(roomId: room.id, message: text, time: time)
+        loadChatRooms()
+        loadChatMessages(roomId: room.id)
+    }
+
+    // 在回调里调用
+    private func handleMessage(room: ChatRoom, message: ChatMessage) {
+        let peer = room.peerAddress?.asString() ?? ""
+        let text = message.contents.first?.utf8Text ?? ""
+        let time = Int64(message.time)
+        let isOutgoing = message.isOutgoing
+        saveMessage(peerAddress: peer, text: text, time: time, isOutgoing: isOutgoing)
+    }
+
+    func enterChatRoom(roomId: Int64) {
+        currentRoomId = roomId
+        chatMessages = db.fetchChatMessages(roomId: roomId)
+    }
+
+    func exitChatRoom() {
+        currentRoomId = nil
+        chatMessages = []
     }
 
     func loadContacts() {
