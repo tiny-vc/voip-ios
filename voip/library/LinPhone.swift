@@ -11,8 +11,9 @@ import linphonesw
 import UIKit
 import AVFoundation
 import SQLite
+import AVFoundation
 
-import CallKit
+/*import CallKit
 
 class CallKitManager: NSObject, CXProviderDelegate {
     
@@ -75,10 +76,17 @@ class CallKitManager: NSObject, CXProviderDelegate {
         // 通知 Linphone 发起呼叫
         action.fulfill()
     }
+}*/
+
+func requestAVPermissions(completion: @escaping (Bool) -> Void) {
+    AVCaptureDevice.requestAccess(for: .audio) { audioGranted in
+        AVCaptureDevice.requestAccess(for: .video) { videoGranted in
+            DispatchQueue.main.async {
+                completion(audioGranted && videoGranted)
+            }
+        }
+    }
 }
-
-
-
 
 
 class LinPhone{
@@ -156,15 +164,15 @@ class LinPhone{
             self.core = try Factory.Instance.createCore(configPath: "", factoryConfigPath: "", systemContext: nil)
             self.core.videoCaptureEnabled = true
             self.core.videoDisplayEnabled = true
-            self.core.callkitEnabled = true
+            //self.core.callkitEnabled = true
             self.core.videoActivationPolicy!.automaticallyAccept = true
             self.version = Core.getVersion
             try self.core.start()
-
             let list=self.supportedVideoDefinitions
             for item in list{
+                print(item.name)
                 //720
-                if(item.name?.contains("720") == true){
+                if(item.name?.contains("ios-medium") == true){
                     self.core.preferredVideoDefinition = item
                 }
             }
@@ -378,7 +386,7 @@ class RingPlayer {
     private init() {}
 
     func play() {
-        if let player = player, player.isPlaying {
+        /*if let player = player, player.isPlaying {
             return
         }
         do {
@@ -397,11 +405,12 @@ class RingPlayer {
         } catch {
             print("无法播放铃声: \(error)")
         }
+        */
     }
 
     func stop() {
-        player?.stop()
-        player = nil
+        /*player?.stop()
+        player = nil*/
     }
 }
 
@@ -473,7 +482,6 @@ class LinPhoneViewModel: ObservableObject {
                             CallKitManager.shared.reportIncomingCall(uuid: uuid, handle: call.remoteAddress?.asString() ?? "未知")*/
                         }
                     case .Connected:
-                        break
                         RingPlayer.shared.stop()
 
                     case .End, .Released, .Error:
@@ -637,12 +645,19 @@ class LinPhoneViewModel: ObservableObject {
     }
 
     func call(to: String, video: Bool = false) {
-        guard let linPhone = linPhone else { return }
-        do {
-            try linPhone.call(to: to, videoEnabled: video)
-        } catch {
-            self.errorMessage = "呼叫失败: \(error)"
+        requestAVPermissions { granted in
+            if granted {
+                guard let linPhone = self.linPhone else { return }
+                do {
+                    try linPhone.call(to: to, videoEnabled: video)
+                } catch {
+                    self.errorMessage = "呼叫失败: \(error)"
+                }
+            } else {
+                self.errorMessage = "需要麦克风和摄像头权限"
+            }
         }
+        
     }
 
     func toggleCallVideo(call: Call) {
@@ -655,11 +670,17 @@ class LinPhoneViewModel: ObservableObject {
     }
 
     func accept(call: Call) {
-        guard let linPhone = linPhone else { return }
-        do {
-            try linPhone.accept(call: call)
-        } catch {
-            self.errorMessage = "接听失败: \(error)"
+        requestAVPermissions { granted in
+            if granted {
+                guard let linPhone = self.linPhone else { return }
+                do {
+                    try linPhone.accept(call: call)
+                } catch {
+                    self.errorMessage = "接听失败: \(error)"
+                }
+            } else {
+                self.errorMessage = "需要麦克风和摄像头权限"
+            }
         }
     }
 

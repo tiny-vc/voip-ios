@@ -184,6 +184,7 @@ struct CallStatusOverlay: View {
     @State private var isSpeakerOn = false
     @State private var isMuted = false
     @State private var showDtmfPad = false
+    @State private var showStats = false
     @State private var timer: Timer? = nil
     @State private var duration: Int = 0
     @State private var quality: Float = 0
@@ -196,6 +197,10 @@ struct CallStatusOverlay: View {
     var canHangup: Bool {
         guard let state = callState else { return false }
         return state != .End && state != .Released && state != .Error && state != .Idle
+    }
+
+    var stats: CallStats? {
+        return call?.audioStats
     }
 
     var body: some View {
@@ -273,7 +278,6 @@ struct CallStatusOverlay: View {
                     }
                 }
             }
-            //.padding(.top, 8)
             .padding(.horizontal, 18)
             .frame(maxWidth: .infinity, alignment: .top)
             if isVideo, isActive {
@@ -298,7 +302,7 @@ struct CallStatusOverlay: View {
             // 底部按钮区
             VStack {
                 Spacer()
-                // 主操作按钮区（适当缩小）
+                // 主操作按钮区
                 if canAccept {
                     HStack(spacing: 40) {
                         Button(action: {
@@ -351,7 +355,7 @@ struct CallStatusOverlay: View {
                     }
                     .padding(.bottom, 24)
                 }
-                // 底部功能按钮区（无彩色背景）
+                // 底部功能按钮区
                 if isActive {
                     HStack(spacing: isVideo ? 32 : 40) {
                         Button(action: {
@@ -431,10 +435,66 @@ struct CallStatusOverlay: View {
                 }
             }
             .padding(.bottom, 8)
+
+            // 统计按钮右上角悬浮
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        showStats.toggle()
+                    }) {
+                        Image(systemName: showStats ? "chart.bar.fill" : "chart.bar")
+                            .font(.system(size: 26))
+                            .foregroundColor(.blue)
+                            .padding(12)
+                    }
+                    .padding(.trailing, 18)
+                    .padding(.top, 18)
+                }
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .zIndex(200)
+
+            // 统计浮窗左上角，无背景色，浮于所有内容之上
+            if showStats, let stats = stats {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("通话统计")
+                        .font(.headline)
+                    Text("下载带宽: \(String(format: "%.2f", stats.downloadBandwidth)) kbit/s")
+                        .font(.caption)
+                    Text("上传带宽: \(String(format: "%.2f", stats.uploadBandwidth)) kbit/s")
+                        .font(.caption)
+                    Text("丢包率: \(String(format: "%.2f", stats.localLossRate))%")
+                        .font(.caption)
+                    Text("远端丢包率: \(String(format: "%.2f", stats.receiverLossRate))%")
+                        .font(.caption)
+                    Text("往返延迟: \(String(format: "%.2f", stats.roundTripDelay)) s")
+                        .font(.caption)
+                    Text("抖动: \(String(format: "%.2f", stats.receiverInterarrivalJitter)) s")
+                        .font(.caption)
+                    Text("RTP丢包累计: \(stats.rtpCumPacketLoss)")
+                        .font(.caption)
+                    Text("RTP接收包数: \(stats.rtpPacketRecv)")
+                        .font(.caption)
+                    Text("RTP发送包数: \(stats.rtpPacketSent)")
+                        .font(.caption)
+                }
+                .padding(.top, 18)
+                .padding(.leading, 18)
+                .frame(maxWidth: 320, alignment: .leading)
+                .zIndex(300)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .allowsHitTesting(false)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // 无背景色
+            }
         }
         .sheet(isPresented: $showDtmfPad) {
             DtmfPadView { dtmf in
-                vm.sendDtmf(dtmf: dtmf)
+                if let char = dtmf.first {
+                    vm.sendDtmf(dtmf: CChar(char.asciiValue ?? 0))
+                }
             }
         }
         .onAppear {
@@ -673,14 +733,11 @@ struct MainTabView: View {
         }
     }
 }
+struct DtmfPadView: View {
+    var onSend: (String) -> Void
+    @Environment(\.presentationMode) var presentationMode
 
-struct DialPadTabView: View {
-    @ObservedObject var vm: LinPhoneViewModel
-    @State private var dialNumber: String = ""
-    @State private var showTextInput = false
-    @State private var textInput = ""
-
-    let dialPadRows: [[String]] = [
+    let dtmfRows: [[String]] = [
         ["1", "2", "3"],
         ["4", "5", "6"],
         ["7", "8", "9"],
@@ -688,110 +745,50 @@ struct DialPadTabView: View {
     ]
 
     var body: some View {
-        NavigationView {
-            VStack {
-                Spacer()
-                // 显示输入的号码
-                Text(dialNumber)
-                    .font(.system(size: 38, weight: .medium, design: .rounded))
-                    .foregroundColor(.primary)
+        VStack(spacing: 24) {
+            Text("DTMF 拨号盘")
+                .font(.title2)
+                .fontWeight(.bold)
+                .padding(.top, 24)
+            Spacer()
+            VStack(spacing: 18) {
+                ForEach(dtmfRows, id: \.self) { row in
+                    HStack(spacing: 28) {
+                        ForEach(row, id: \.self) { digit in
+                            Button(action: {
+                                onSend(digit)
+                            }) {
+                                Text(digit)
+                                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                                    .frame(width: 72, height: 72)
+                                    .background(Color.blue.opacity(0.12))
+                                    .foregroundColor(.primary)
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                }
+            }
+            Spacer()
+            Button(action: {
+                presentationMode.wrappedValue.dismiss()
+            }) {
+                Text("关闭")
+                    .font(.headline)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-                    .background(Color(.secondarySystemBackground))
-                    .cornerRadius(16)
-                    .padding(.horizontal, 32)
-                    .minimumScaleFactor(0.5)
-                    .lineLimit(1)
-
-                Spacer()
-                // 拨号键盘
-                VStack(spacing: 18) {
-                    ForEach(dialPadRows, id: \.self) { row in
-                        HStack(spacing: 28) {
-                            ForEach(row, id: \.self) { digit in
-                                Button(action: {
-                                    dialNumber.append(digit)
-                                }) {
-                                    Text(digit)
-                                        .font(.system(size: 36, weight: .bold, design: .rounded))
-                                        .frame(width: 72, height: 72)
-                                        .background(Color.blue.opacity(0.12))
-                                        .foregroundColor(.primary)
-                                        .clipShape(Circle())
-                                }
-                                .buttonStyle(PlainButtonStyle())
-                            }
-                        }
-                    }
-                    // 操作按钮行
-                    HStack(spacing: 40) {
-                        // 删除
-                        Button(action: {
-                            if !dialNumber.isEmpty {
-                                dialNumber.removeLast()
-                            }
-                        }) {
-                            Image(systemName: "delete.left")
-                                .font(.system(size: 28, weight: .regular))
-                                .frame(width: 60, height: 60)
-                                .background(Color.gray.opacity(0.15))
-                                .foregroundColor(.gray)
-                                .clipShape(Circle())
-                        }
-                        // 文本输入
-                        Button(action: {
-                            showTextInput = true
-                        }) {
-                            Image(systemName: "text.cursor")
-                                .font(.system(size: 24, weight: .regular))
-                                .frame(width: 60, height: 60)
-                                .background(Color.green.opacity(0.15))
-                                .foregroundColor(.green)
-                                .clipShape(Circle())
-                        }
-                        // 拨号
-                        Button(action: {
-                            vm.call(to: "sip:\(dialNumber)@\(vm.options!.domain)")
-                            dialNumber = ""
-                        }) {
-                            Image(systemName: "phone.fill")
-                                .font(.system(size: 32, weight: .bold))
-                                .frame(width: 60, height: 60)
-                                .background(dialNumber.isEmpty ? Color.gray.opacity(0.15) : Color.green)
-                                .foregroundColor(dialNumber.isEmpty ? .gray : .white)
-                                .clipShape(Circle())
-                        }
-                        .disabled(dialNumber.isEmpty)
-                    }
-                    .padding(.top, 8)
-                }
-                .padding(.bottom, 32)
-                Spacer()
+                    .padding()
+                    .background(Color.gray.opacity(0.15))
+                    .foregroundColor(.primary)
+                    .cornerRadius(10)
             }
-            .padding(.top, 24)
-            .background(Color(.systemBackground))
-            .navigationTitle("拨号键盘")
-            // 弹出文本输入框
-            .alert("输入SIP地址或用户名", isPresented: $showTextInput) {
-                TextField("如 name 或 sip:name@domain", text: $textInput)
-                Button("呼叫") {
-                    var target = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !target.isEmpty {
-                        // 如果没有 @，自动补全 domain
-                        if !target.contains("@"), let domain = vm.options?.domain {
-                            target = "sip:\(target)@\(domain)"
-                        }
-                        vm.call(to: target)
-                    }
-                    textInput = ""
-                }
-                Button("取消", role: .cancel) {
-                    textInput = ""
-                }
-            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 24)
         }
+        .background(Color(.systemBackground))
     }
 }
+
 
 struct ContactEditAction: Identifiable {
     let id = UUID() // 唯一标识，满足 Identifiable 协议
@@ -967,7 +964,7 @@ struct ContactsView: View {
                         cloudContacts = resp.data.map {
                             Contact(
                                 id: Int64($0.user_id),
-                                username: $0.user_displayname,
+                                username: $0.user_displayname ?? $0.user_name,
                                 sipAddress: "sip:\($0.user_name)@\(vm.options?.domain ?? "")",
                                 phoneNumber: $0.user_phone,
                                 remark: nil
@@ -1553,9 +1550,11 @@ struct UserItem: Identifiable, Decodable {
     let user_id: Int
     let user_name: String
     let user_password: String
-    let user_displayname: String
+    let user_displayname: String?
     let user_phone: String?
-    let user_type: Int // 1=管理员, 2=普通用户
+    let user_type: Int // 1内部, 2 对接
+    let user_enabled: Int // 1启用 2禁用
+    let user_role:Int //1 管理员 2 普通用户
 
     var id: Int { user_id }
 }
@@ -1572,6 +1571,8 @@ struct UserListResponse: Decodable {
     let total: Int
 }
 
+
+// 用户管理列表
 struct UserManagementView: View {
     @ObservedObject var vm: LinPhoneViewModel
     @State private var users: [UserItem] = []
@@ -1588,12 +1589,29 @@ struct UserManagementView: View {
             List {
                 ForEach(users) { user in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(user.user_displayname)
-                            .font(.headline)
+                        HStack {
+                            Text(user.user_displayname ?? "")
+                                .font(.headline)
+                            Spacer()
+                            Text(user.user_enabled == 1 ? "启用" : "禁用")
+                                .font(.caption)
+                                .foregroundColor(user.user_enabled == 1 ? .green : .red)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill((user.user_enabled == 1 ? Color.green : Color.red).opacity(0.12))
+                                )
+                        }
                         Text("账号: \(user.user_name)")
                             .font(.subheadline)
                             .foregroundColor(.gray)
-                        Text("类型: \(user.user_type == 1 ? "管理员" : "普通用户")")
+                        if let phone = user.user_phone, !phone.isEmpty {
+                            Text("手机号: \(phone)")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                        }
+                        Text("类型: \(user.user_type == 1 ? "内部" : "对接") 角色: \(user.user_role == 1 ? "管理员" : "普通用户")")
                             .font(.subheadline)
                             .foregroundColor(.gray)
                     }
@@ -1650,7 +1668,7 @@ struct UserManagementView: View {
             )
             .sheet(isPresented: $showAddUser) {
                 AddEditUserView(
-                    vm:vm,
+                    vm: vm,
                     user: nil,
                     onSave: { newUser in
                         addUser(newUser)
@@ -1660,7 +1678,7 @@ struct UserManagementView: View {
             }
             .sheet(item: $editUser) { user in
                 AddEditUserView(
-                    vm:vm,
+                    vm: vm,
                     user: user,
                     onSave: { updatedUser in
                         updateUser(updatedUser)
@@ -1697,7 +1715,6 @@ struct UserManagementView: View {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Fetch Users Response Data: \(String(data: data, encoding: .utf8) ?? "")")    
                     if let resp = try? JSONDecoder().decode(UserListResponse.self, from: data) {
                         if resp.code == 1 {
                             totalCount = resp.total
@@ -1732,14 +1749,16 @@ struct UserManagementView: View {
             "user_name": user.user_name,
             "user_displayname": user.user_displayname,
             "user_password": user.user_password,
-            "user_type": 2 // 普通用户
+            "user_phone": user.user_phone ?? "",
+            "user_type": user.user_type,
+            "user_enabled": user.user_enabled,
+            "user_role": user.user_role
         ]
         HttpClient.shared.post(url: "\(apiUrl)/user/add", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Add User Response Data: \(String(data: data, encoding: .utf8) ?? "")")
                     if let resp = try? JSONDecoder().decode(UserResponse.self, from: data) {
                         if resp.code == 1 {
                             showAddUser = false
@@ -1763,14 +1782,17 @@ struct UserManagementView: View {
             "user_id": user.user_id,
             "user_name": user.user_name,
             "user_displayname": user.user_displayname,
-            "user_password": user.user_password
+            "user_password": user.user_password,
+            "user_phone": user.user_phone ?? "",
+            "user_type": user.user_type,
+            "user_enabled": user.user_enabled,
+            "user_role": user.user_role
         ]
         HttpClient.shared.post(url: "\(apiUrl)/user/update", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Update User Response Data: \(String(data: data, encoding: .utf8) ?? "")")
                     if let resp = try? JSONDecoder().decode(UserResponse.self, from: data) {
                         if resp.code == 1 {
                             editUser = nil
@@ -1798,7 +1820,6 @@ struct UserManagementView: View {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Delete User Response Data: \(String(data: data, encoding: .utf8) ?? "")")
                     if let resp = try? JSONDecoder().decode(UserResponse.self, from: data) {
                         if resp.code == 1 {
                             Task { await refresh() }
@@ -1826,6 +1847,23 @@ struct AddEditUserView: View {
     @State private var userName: String = ""
     @State private var displayName: String = ""
     @State private var password: String = ""
+    @State private var phone: String = ""
+    @State private var userType: Int = 2
+    @State private var userEnabled: Int = 1
+    @State private var userRole: Int = 2
+
+    let typeOptions = [
+        (name: "内部", value: 1),
+        (name: "对接", value: 2)
+    ]
+    let enabledOptions = [
+        (name: "启用", value: 1),
+        (name: "禁用", value: 2)
+    ]
+    let roleOptions = [
+        (name: "管理员", value: 1),
+        (name: "普通用户", value: 2)
+    ]
 
     var isEdit: Bool { user != nil }
 
@@ -1834,7 +1872,6 @@ struct AddEditUserView: View {
             Form {
                 Section(header: Text("用户信息")) {
                     if isEdit {
-                        // 编辑模式下账号不可修改
                         TextField("账号", text: $userName)
                             .disabled(true)
                             .foregroundColor(.gray)
@@ -1844,6 +1881,23 @@ struct AddEditUserView: View {
                     }
                     TextField("显示名称", text: $displayName)
                     SecureField("密码", text: $password)
+                    TextField("手机号（可选）", text: $phone)
+                        .keyboardType(.phonePad)
+                    Picker("类型", selection: $userType) {
+                        ForEach(typeOptions, id: \.value) { option in
+                            Text(option.name).tag(option.value)
+                        }
+                    }
+                    Picker("状态", selection: $userEnabled) {
+                        ForEach(enabledOptions, id: \.value) { option in
+                            Text(option.name).tag(option.value)
+                        }
+                    }
+                    Picker("角色", selection: $userRole) {
+                        ForEach(roleOptions, id: \.value) { option in
+                            Text(option.name).tag(option.value)
+                        }
+                    }
                 }
             }
             .navigationTitle(isEdit ? "修改用户" : "添加用户")
@@ -1858,10 +1912,11 @@ struct AddEditUserView: View {
                             user_id: user?.user_id ?? 0,
                             user_name: userName,
                             user_password: password,
-                            user_displayname: displayName, 
-                            //need
-                            user_phone: nil,
-                            user_type: user?.user_type ?? 2
+                            user_displayname: displayName,
+                            user_phone: phone.isEmpty ? nil : phone,
+                            user_type: userType,
+                            user_enabled: userEnabled,
+                            user_role: userRole
                         )
                         onSave(newUser)
                     }
@@ -1871,8 +1926,12 @@ struct AddEditUserView: View {
             .onAppear {
                 if let u = user {
                     userName = u.user_name
-                    displayName = u.user_displayname
-                    password = u.user_password 
+                    displayName = u.user_displayname ?? ""
+                    password = u.user_password
+                    phone = u.user_phone ?? ""
+                    userType = u.user_type
+                    userEnabled = u.user_enabled
+                    userRole = u.user_role
                 }
             }
         }
@@ -1892,14 +1951,13 @@ struct AddEditUserView: View {
 struct GatewayItem: Identifiable, Decodable {
     let gateway_id: Int
     let gateway_name: String
-    let gateway_type: Int //1 落地 2 对接 
+    let gateway_type: Int //1 sip 2 h323 
     let gateway_host: String
     let gateway_port: Int
     let gateway_realm: String
     let gateway_username: String
     let gateway_password: String
-    let gateway_prefix: String?
-    let gateway_priority: Int?
+    let gateway_authtype:Int //1 帐号认证 2 IP认证
     let gateway_enabled: Int // 1启用 2禁用
     let gateway_remark: String?
 
@@ -1917,6 +1975,7 @@ struct GatewayListResponse: Decodable {
     let data: [GatewayItem]
     let total: Int
 }
+
 
 struct GatewayManagementView: View {
     @ObservedObject var vm: LinPhoneViewModel
@@ -1948,14 +2007,17 @@ struct GatewayManagementView: View {
                                         .fill((gateway.gateway_enabled == 1 ? Color.green : Color.red).opacity(0.12))
                                 )
                         }
-                        Text("类型: \(gateway.gateway_type == 1 ? "落地" : "对接")  地址: \(gateway.gateway_host):\(String(gateway.gateway_port))")
+                        Text("类型: \(gateway.gateway_type == 1 ? "SIP" : "H323") 认证: \(gateway.gateway_authtype == 1 ? "帐号" : "IP")")
                             .font(.subheadline)
                             .foregroundColor(.gray)
-                        Text("用户名: \(gateway.gateway_username)  优先级: \(gateway.gateway_priority.map { "\($0)" } ?? "-")")
+                        Text("地址: \(gateway.gateway_host):\(gateway.gateway_port) Realm: \(gateway.gateway_realm)")
                             .font(.subheadline)
                             .foregroundColor(.gray)
-                        if !((gateway.gateway_remark ?? "").isEmpty) {
-                            Text("备注: \(gateway.gateway_remark ?? "")")
+                        Text("用户名: \(gateway.gateway_username)")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        if let remark = gateway.gateway_remark, !remark.isEmpty {
+                            Text("备注: \(remark)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -2060,7 +2122,7 @@ struct GatewayManagementView: View {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Fetch Gateways Response Data: \(String(data: data, encoding: .utf8) ?? "")")
+                    print("Gateway list response: \(String(data: data, encoding: .utf8) ?? "")")
                     if let resp = try? JSONDecoder().decode(GatewayListResponse.self, from: data) {
                         if resp.code == 1 {
                             totalCount = resp.total
@@ -2099,8 +2161,8 @@ struct GatewayManagementView: View {
             "gateway_realm": gateway.gateway_realm,
             "gateway_username": gateway.gateway_username,
             "gateway_password": gateway.gateway_password,
-            "gateway_prefix": gateway.gateway_prefix,
-            "gateway_priority": gateway.gateway_priority,
+            "gateway_authtype": gateway.gateway_authtype,
+            "gateway_enabled": gateway.gateway_enabled,
             "gateway_remark": gateway.gateway_remark
         ]
         HttpClient.shared.post(url: "\(apiUrl)/gateway/add", body: params) { result in
@@ -2108,7 +2170,6 @@ struct GatewayManagementView: View {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Add Gateway Response Data: \(String(data: data, encoding: .utf8) ?? "")")
                     if let resp = try? JSONDecoder().decode(GatewayResponse.self, from: data) {
                         if resp.code == 1 {
                             showAddGateway = false
@@ -2137,8 +2198,8 @@ struct GatewayManagementView: View {
             "gateway_realm": gateway.gateway_realm,
             "gateway_username": gateway.gateway_username,
             "gateway_password": gateway.gateway_password,
-            "gateway_prefix": gateway.gateway_prefix,
-            "gateway_priority": gateway.gateway_priority,
+            "gateway_authtype": gateway.gateway_authtype,
+            "gateway_enabled": gateway.gateway_enabled,
             "gateway_remark": gateway.gateway_remark
         ]
         HttpClient.shared.post(url: "\(apiUrl)/gateway/update", body: params) { result in
@@ -2146,7 +2207,6 @@ struct GatewayManagementView: View {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Update Gateway Response Data: \(String(data: data, encoding: .utf8) ?? "")")
                     if let resp = try? JSONDecoder().decode(GatewayResponse.self, from: data) {
                         if resp.code == 1 {
                             editGateway = nil
@@ -2174,7 +2234,6 @@ struct GatewayManagementView: View {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Delete Gateway Response Data: \(String(data: data, encoding: .utf8) ?? "")")
                     if let resp = try? JSONDecoder().decode(GatewayResponse.self, from: data) {
                         if resp.code == 1 {
                             Task { await refresh() }
@@ -2192,9 +2251,6 @@ struct GatewayManagementView: View {
     }
 }
 
-
-
-// 添加/编辑网关弹窗
 struct AddEditGatewayView: View {
     @ObservedObject var vm: LinPhoneViewModel
     var gateway: GatewayItem?
@@ -2202,20 +2258,23 @@ struct AddEditGatewayView: View {
     var onCancel: () -> Void
 
     @State private var gatewayName: String = ""
-    @State private var gatewayType: Int = 1 // 1=sip, 2=pstn
+    @State private var gatewayType: Int = 1 // 1=sip, 2=h323
     @State private var gatewayHost: String = ""
     @State private var gatewayPort: String = ""
     @State private var gatewayRealm: String = ""
     @State private var gatewayUsername: String = ""
     @State private var gatewayPassword: String = ""
-    @State private var gatewayPrefix: String = ""
-    @State private var gatewayPriority: String = ""
+    @State private var gatewayAuthtype: Int = 1 // 1帐号认证 2 IP认证
     @State private var gatewayRemark: String = ""
     @State private var gatewayEnabled: Int = 1 // 默认启用
 
     let gatewayTypeOptions = [
         (name: "SIP网关", value: 1),
-        (name: "PSTN网关", value: 2)
+        (name: "H323网关", value: 2)
+    ]
+    let authtypeOptions = [
+        (name: "帐号认证", value: 1),
+        (name: "IP认证", value: 2)
     ]
     let enabledOptions = [
         (name: "启用", value: 1),
@@ -2240,9 +2299,11 @@ struct AddEditGatewayView: View {
                     TextField("Realm", text: $gatewayRealm)
                     TextField("用户名", text: $gatewayUsername)
                     SecureField("密码", text: $gatewayPassword)
-                    TextField("前缀（可选）", text: $gatewayPrefix)
-                    TextField("优先级（可选）", text: $gatewayPriority)
-                        .keyboardType(.numberPad)
+                    Picker("认证方式", selection: $gatewayAuthtype) {
+                        ForEach(authtypeOptions, id: \.value) { option in
+                            Text(option.name).tag(option.value)
+                        }
+                    }
                     Picker("状态", selection: $gatewayEnabled) {
                         ForEach(enabledOptions, id: \.value) { option in
                             Text(option.name).tag(option.value)
@@ -2268,8 +2329,7 @@ struct AddEditGatewayView: View {
                             gateway_realm: gatewayRealm,
                             gateway_username: gatewayUsername,
                             gateway_password: gatewayPassword,
-                            gateway_prefix: gatewayPrefix.isEmpty ? nil : gatewayPrefix,
-                            gateway_priority: gatewayPriority.isEmpty ? nil : Int(gatewayPriority),
+                            gateway_authtype: gatewayAuthtype,
                             gateway_enabled: gatewayEnabled,
                             gateway_remark: gatewayRemark.isEmpty ? nil : gatewayRemark
                         )
@@ -2287,8 +2347,7 @@ struct AddEditGatewayView: View {
                     gatewayRealm = g.gateway_realm
                     gatewayUsername = g.gateway_username
                     gatewayPassword = g.gateway_password
-                    gatewayPrefix = g.gateway_prefix ?? ""
-                    gatewayPriority = g.gateway_priority.map { "\($0)" } ?? ""
+                    gatewayAuthtype = g.gateway_authtype
                     gatewayRemark = g.gateway_remark ?? ""
                     gatewayEnabled = g.gateway_enabled
                 }
@@ -2306,14 +2365,171 @@ struct AddEditGatewayView: View {
     }
 }
 
+struct CallItem: Identifiable, Decodable {
+    let call_id: Int
+    let call_callid: String
+    let call_direction: Int? //1 呼入 2 呼出 3 内部
+    let call_fromuri: String
+    let call_touri: String
+    let call_fromtag: String
+    let call_totag: String?
+    let call_finalcode: Int?
+    let call_starttime: String? //开始时间
+    let call_answertime: String? //应答时间
+    let call_endtime: String?
+    let call_duration: Int? //通话时长，单位秒
+    let call_gatewayid: Int?
+    let call_gatewayname: String?
+    let call_status:Int?   //1 未接通 2 已接通
+    let call_hangupcause: Int? //1 正常 2 取消 3 拒绝 4 忙 5 未接听（超时） 6 错误 
+    let call_errorcause: Int? // 1 邀请系统错误 2 桥接系统错误 3 邀请ua返回错误码 4 桥接ua返回错误码 
+
+    var id : Int { call_id }
+}
+
+struct CallListResponse: Decodable {
+    let code: Int
+    let message: String
+    let data: [CallItem]
+    let total: Int
+}
+
 struct CallQueryView: View {
+    @State private var calls: [CallItem] = []
+    @State private var isLoading = false
+    @State private var page = 1
+    @State private var limit = 20
+    @State private var totalCount = 0
+
     var body: some View {
-        Text("")
-            .font(.title)
-            .foregroundColor(.green)
+        NavigationView {
+            List {
+                ForEach(calls) { call in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(call.call_direction == 1 ? "呼入" : (call.call_direction == 2 ? "呼出" : "内部"))
+                                .font(.headline)
+                                .foregroundColor(call.call_direction == 1 ? .green : (call.call_direction == 2 ? .blue : .gray))
+                            Spacer()
+                            Text(call.call_status == 2 ? "已接通" : "未接通")
+                                .font(.caption)
+                                .foregroundColor(call.call_status == 2 ? .green : .red)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill((call.call_status == 2 ? Color.green : Color.red).opacity(0.12))
+                                )
+                        }
+                        Text("主叫: \(call.call_fromuri)")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        Text("被叫: \(call.call_touri)")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        Text("网关: \(call.call_gatewayname ?? "")")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        HStack(spacing: 16) {
+                            /*Text("开始: \(formatDate(call.call_starttime))")*/
+                            Text("时长: \(call.call_duration ?? 0)秒")
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                        HStack(spacing: 16) {
+                            Text("挂断原因: \(hangupCauseText(call.call_hangupcause ?? 0))")
+                            Text("最终响应: \(call.call_finalcode ?? 0)")
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 8)
+                }
+                // 底部加载更多
+                if calls.count < totalCount && !isLoading {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .onAppear {
+                                loadMore()
+                            }
+                        Spacer()
+                    }
+                }
+            }
             .navigationTitle("通话查询")
+            .onAppear {
+                if calls.isEmpty {
+                    fetchCalls(reset: true)
+                }
+            }
+            .refreshable {
+                fetchCalls(reset: true)
+            }
+        }
+    }
+
+    func fetchCalls(reset: Bool) {
+        isLoading = true
+        let params: [String: Any] = ["page": page, "limit": limit]
+        HttpClient.shared.post(url: "\(apiUrl)/call/list", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    print("Call list response: \(String(data: data, encoding: .utf8) ?? "")")
+                    if let resp = try? JSONDecoder().decode(CallListResponse.self, from: data) {
+                        totalCount = resp.total
+                        if reset {
+                            calls = resp.data
+                        } else {
+                            calls += resp.data
+                        }
+                    }
+                case .failure(_):
+                    // Handle error case
+                    calls = []
+                }
+            }
+        }
+    }
+
+    func loadMore() {
+        guard !isLoading, calls.count < totalCount else { return }
+        page += 1
+        fetchCalls(reset: false)
+    }
+
+    func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    func hangupCauseText(_ cause: Int) -> String {
+        switch cause {
+        case 1: return "正常"
+        case 2: return "取消"
+        case 3: return "拒绝"
+        case 4: return "忙"
+        case 5: return "未接听"
+        case 6: return "错误"
+        default: return "-"
+        }
+    }
+
+    func errorCauseText(_ cause: Int) -> String {
+        switch cause {
+        case 1: return "邀请系统错误"
+        case 2: return "桥接系统错误"
+        case 3: return "邀请UA错误码"
+        case 4: return "桥接UA错误码"
+        default: return "-"
+        }
     }
 }
+
+
 
 
 
