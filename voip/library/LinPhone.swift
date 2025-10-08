@@ -243,6 +243,10 @@ class LinPhone{
         try call.terminate()
     }
 
+    func decline(call: Call, reason: Reason) throws {
+        try call.decline(reason: reason)
+    }
+
     func accept(call: Call) throws {
         try call.accept()
     }
@@ -269,6 +273,15 @@ class LinPhone{
 
     func resume(call: Call) throws {
         try call.resume()
+    }
+
+    func redirectTo(call: Call, to: String) throws {
+        let address = try Factory.Instance.createAddress(addr: to)
+        try call.redirectTo(redirectAddress: address)
+    }
+
+    func update(call: Call, params: CallParams?) throws {
+        try call.update(params: params)
     }
 
     func setSpeaker(call: Call, on: Bool) {
@@ -349,9 +362,6 @@ class LinPhone{
         try call.sendDtmf(dtmf: dtmf)
     }
 
-    func sendDtmfs(call: Call, dtmfs: String) throws {
-        try call.sendDtmfs(dtmfs: dtmfs)
-    }
 
     func startRecording(call: Call)  {
         call.startRecording()
@@ -386,13 +396,13 @@ class RingPlayer {
     private init() {}
 
     func play() {
-        /*if let player = player, player.isPlaying {
+        if let player = player, player.isPlaying {
             return
         }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, options: [.mixWithOthers])
-            try session.overrideOutputAudioPort(.speaker) // 强制扬声器
+           // try session.overrideOutputAudioPort(.speaker) // 强制扬声器
             try session.setActive(true)
         } catch {
             print("设置音频会话失败: \(error)")
@@ -405,15 +415,21 @@ class RingPlayer {
         } catch {
             print("无法播放铃声: \(error)")
         }
-        */
+        
     }
 
     func stop() {
-        /*player?.stop()
-        player = nil*/
+        player?.stop()
+        player = nil
     }
 }
 
+struct LoginResponse: Decodable{
+    let code: Int
+    let message: String
+    let data: UserItem
+    let token: String
+}
 
 class LinPhoneViewModel: ObservableObject {
     private var linPhone: LinPhone?
@@ -433,7 +449,10 @@ class LinPhoneViewModel: ObservableObject {
     @Published var chatRooms: [ChatRoomLocal] = []
     @Published var currentRoomId: Int64? = nil
     @Published var chatMessages: [ChatMessageLocal] = []
-    var currentUUID: UUID? = nil
+    //var currentUUID: UUID? = nil
+    var userToken: String? = nil
+    var userInfo: UserItem? = nil
+    let apiUrl = "http://180.97.215.207:3001"
 
     var nativeVideoWindow: UIView? {
         get{
@@ -624,11 +643,62 @@ class LinPhoneViewModel: ObservableObject {
         db.clearAccount()
     }
 
+    func post(path:String,body: [String: Any?] = [:],headers: [String: String] = [:],completion: @escaping (Swift.Result<Data, Error>) -> Void) {
+        var newHeaders = headers
+        newHeaders["token"] = userToken
+        HttpClient.shared.post(url: "\(apiUrl)\(path)", body: body, headers: newHeaders, completion: completion)
+    }
+
+
+    /// 使用后端登录 (/user/login)，参数 user_name / user_password
+    /// 成功时解析 LoginResponse，设置 userToken 与 userInfo
+    func loginNetwork(userName: String, userPassword: String, completion: ((Bool) -> Void)? = nil) {
+        let body: [String: Any] = [
+            "user_name": userName,
+            "user_password": userPassword
+        ]
+        // 可在 UI 层显示加载状态，这里仅执行请求并处理结果
+        post(path: "/user/login", body: body) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(LoginResponse.self, from: data)
+                        if resp.code == 1 {
+                            // 设置 token 与用户信息
+                            self.userToken = resp.token
+                            self.userInfo = resp.data
+                            completion?(true)
+                        } else {
+                            self.errorMessage = resp.message
+                            completion?(false)
+                        }
+                    } catch {
+                        self.errorMessage = "数据解析失败"
+                        completion?(false)
+                    }
+                case .failure(let error):
+                    self.errorMessage = "网络错误: \(error.localizedDescription)"
+                    completion?(false)
+                }
+            }
+        }
+    }
+
+
     func login(options:LinPhone.Options) {
         guard let linPhone = linPhone else { return }
         do {
             try linPhone.login(options: options)
             self.options = options
+            self.loginNetwork(userName: options.username, userPassword: options.password) { success in
+                /*if !success {
+                    // 登录失败，注销 Linphone
+                    linPhone.logout()
+                    self.isRegistered = false
+                }*/
+            }
         } catch {
             self.errorMessage = "登录失败: \(error)"
         }

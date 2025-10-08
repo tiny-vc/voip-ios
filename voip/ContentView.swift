@@ -9,7 +9,10 @@ import SwiftUI
 import linphonesw
 import UIKit
 
-let apiUrl = "http://180.97.215.207:3001"
+struct CommonResponse: Decodable {
+    let code: Int
+    let message: String
+}
 
 func updateIdleTimer(for isActive: Bool) {
     UIApplication.shared.isIdleTimerDisabled = isActive
@@ -64,27 +67,51 @@ struct ContentView: View {
     }
 }
 
+
+
+// 轻量毛玻璃视图，用于 Toast 背景
+struct BlurView: UIViewRepresentable {
+    var style: UIBlurEffect.Style = .systemThinMaterial
+
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        UIVisualEffectView(effect: UIBlurEffect(style: style))
+    }
+
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
+}
+
+// 美化后的 ToastView：磨砂背景 + 半透明叠加 + 圆角 + 阴影
 struct ToastView: View {
     let message: String
+
     var body: some View {
         Text(message)
             .font(.body)
-            .foregroundColor(.black) // 文字改为黑色
-            .padding(.horizontal, 24)
-            .padding(.vertical, 14)
+            .foregroundColor(.primary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .frame(maxWidth: 340)
             .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.white.opacity(0.95)) // 背景改为高亮白色
-                    .shadow(color: .black.opacity(0.3), radius: 10)
+                ZStack {
+                    BlurView(style: .systemThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.black.opacity(0.12))
+                }
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.blue.opacity(0.5), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
             )
-            .frame(maxWidth: 320)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .shadow(color: Color.black.opacity(0.25), radius: 8, x: 0, y: 4)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .allowsHitTesting(false)
     }
 }
+
 
 
 struct LoginView: View {
@@ -173,6 +200,9 @@ struct LoginView: View {
                 username = account.username
                 password = account.password
                 transport = account.transport
+            }
+            else{
+                domain = "180.97.215.207:5555"
             }
         }
     }
@@ -686,18 +716,25 @@ struct DialPadTabView: View {
     func fetchGateways() {
         isLoadingGateway = true
         //need 只获取落地
-        HttpClient.shared.post(url: "\(apiUrl)/gateway/list", body: ["page": 1, "limit": 100]) { result in
+        let params: [String: Any?] = ["page": 1, "limit": 1000]
+        vm.post(path: "/gateway/list", body: params) { result in
             DispatchQueue.main.async {
                 isLoadingGateway = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(GatewayListResponse.self, from: data), resp.code == 1 {
-                        gateways = resp.data
-                    } else {
-                        gateways = []
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data) 
+                        if resp.code == 1 {
+                            let gatewayResp = try JSONDecoder().decode(GatewayListResponse.self, from: data)
+                            gateways = gatewayResp.data
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
                     }
-                case .failure(_):
-                    gateways = []
+                case .failure(let error):
+                    vm.errorMessage = "请求失败: \(error.localizedDescription)"
                 }
             }
         }
@@ -954,25 +991,33 @@ struct ContactsView: View {
 
     func fetchCloudContacts() {
         isLoadingCloud = true
-        let params: [String: Any] = ["page": 1, "limit": 100]
-        HttpClient.shared.post(url: "\(apiUrl)/user/list", body: params) { result in
+        let params: [String: Any?] = ["page": 1, "limit": 1000]
+        vm.post(path: "/user/list", body: params) { result in
             DispatchQueue.main.async {
                 isLoadingCloud = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(UserListResponse.self, from: data), resp.code == 1 {
-                        cloudContacts = resp.data.map {
-                            Contact(
-                                id: Int64($0.user_id),
-                                username: $0.user_displayname ?? $0.user_name,
-                                sipAddress: "sip:\($0.user_name)@\(vm.options?.domain ?? "")",
-                                phoneNumber: $0.user_phone,
-                                remark: nil
-                            )
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let userListResp = try JSONDecoder().decode(UserListResponse.self, from: data)
+                            cloudContacts = userListResp.data.map {
+                                Contact(
+                                    id: Int64($0.user_id),
+                                    username: $0.user_displayname ?? $0.user_name,
+                                    sipAddress: "sip:\($0.user_name)@\(vm.options?.domain ?? "")",
+                                    phoneNumber: $0.user_phone,
+                                    remark: nil
+                                )
+                            }
+                        } else {
+                            vm.errorMessage =  resp.message
                         }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
                     }
                 case .failure(let error):
-                    vm.errorMessage = "云端联系人加载失败: \(error.localizedDescription)"
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
                 }
             }
         }
@@ -1205,6 +1250,38 @@ func formatTimestamp(_ timestamp: time_t) -> String {
     formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
     return formatter.string(from: date)
 }
+
+//utc字符串转本地时间字符串
+// ...existing code...
+func formatUtcString(_ utcString: String?) -> String {
+    guard let s = utcString?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return "-" }
+
+    // 1) 优先使用 ISO8601DateFormatter（支持 fractional seconds）
+    let iso = ISO8601DateFormatter()
+    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let d = iso.date(from: s) {
+        let out = DateFormatter()
+        out.locale = Locale.current
+        out.timeZone = TimeZone.current
+        out.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return out.string(from: d)
+    }
+
+    // 2) 再尝试不带 fractional seconds 的 ISO8601
+    iso.formatOptions = [.withInternetDateTime]
+    if let d = iso.date(from: s) {
+        let out = DateFormatter()
+        out.locale = Locale.current
+        out.timeZone = TimeZone.current
+        out.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return out.string(from: d)
+    }
+
+
+    // 无法解析则返回原值或 "-"
+    return utcString ?? "-"
+}
+// ...existing code...
 
 func statusText(for status: Call.Status) -> String {
     switch status {
@@ -1494,7 +1571,7 @@ struct SettingsView: View {
                         .background(Color(.systemGray6))
                         .cornerRadius(10)
                     }
-                    NavigationLink(destination: CallQueryView()) {
+                    NavigationLink(destination: CallQueryView(vm: vm)) {
                         HStack {
                             Image(systemName: "magnifyingglass")
                                 .foregroundColor(.green)
@@ -1555,13 +1632,18 @@ struct UserItem: Identifiable, Decodable {
     let user_type: Int // 1内部, 2 对接
     let user_enabled: Int // 1启用 2禁用
     let user_role:Int //1 管理员 2 普通用户
-
+    let user_gatewaytype: Int? // 1 全部 2 部分
+    let user_gateways: [Int]?
     var id: Int { user_id }
 }
 
-struct UserResponse: Decodable {
+
+
+struct UserInfoResponse: Decodable {
     let code: Int
     let message: String
+    let data: UserItem
+    
 }
 
 struct UserListResponse: Decodable {
@@ -1573,6 +1655,11 @@ struct UserListResponse: Decodable {
 
 
 // 用户管理列表
+// ...existing code...
+
+// ...existing code...
+
+// 完整的用户管理视图（含把保存落地网关请求放在父视图处理）
 struct UserManagementView: View {
     @ObservedObject var vm: LinPhoneViewModel
     @State private var users: [UserItem] = []
@@ -1583,9 +1670,10 @@ struct UserManagementView: View {
     @State private var isRefreshing = false
     @State private var showAddUser = false
     @State private var editUser: UserItem? = nil
+    @State private var setGatewaysUser: UserItem? = nil // 打开设置落地网关弹窗
 
     var body: some View {
-        NavigationView {
+        //NavigationView {
             List {
                 ForEach(users) { user in
                     VStack(alignment: .leading, spacing: 4) {
@@ -1628,6 +1716,12 @@ struct UserManagementView: View {
                             Label("编辑", systemImage: "pencil")
                         }
                         .tint(.orange)
+                        Button {
+                            setGatewaysUser = user
+                        } label: {
+                            Label("落地网关", systemImage: "network")
+                        }
+                        .tint(.purple)
                     }
                 }
                 // 底部加载更多
@@ -1686,12 +1780,27 @@ struct UserManagementView: View {
                     onCancel: { editUser = nil }
                 )
             }
+            // SetUserGatewaysView 只负责 UI，保存由父视图 setUserGateways 执行
+            .sheet(item: $setGatewaysUser) { user in
+                SetUserGatewaysView(
+                    vm: vm,
+                    user: user,
+                    onSave: { userId, gatewayType, gatewayIds in
+                        // 由父视图统一提交保存请求
+                        setUserGateways(userId: userId, gatewayType: gatewayType, gatewayIds: gatewayIds)
+                    },
+                    onCancel: {
+                        setGatewaysUser = nil
+                    }
+                    
+                )
+            }
             .onAppear {
                 if users.isEmpty {
                     Task { await refresh() }
                 }
             }
-        }
+        //}
     }
 
     func refresh() async {
@@ -1709,24 +1818,26 @@ struct UserManagementView: View {
 
     func fetchUsers(reset: Bool) {
         isLoading = true
-        let params = ["page": page, "limit": limit]
-        HttpClient.shared.post(url: "\(apiUrl)/user/list", body: params) { result in
+        let params: [String: Any?] = ["page": page, "limit": limit]
+        vm.post(path: "/user/list", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(UserListResponse.self, from: data) {
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
                         if resp.code == 1 {
-                            totalCount = resp.total
+                            let userListResp = try JSONDecoder().decode(UserListResponse.self, from: data)
+                            totalCount = userListResp.total
                             if reset {
-                                users = resp.data
+                                users = userListResp.data
                             } else {
-                                users += resp.data
+                                users += userListResp.data
                             }
                         } else {
                             vm.errorMessage = resp.message
                         }
-                    } else {
+                    } catch {
                         vm.errorMessage = "数据解析失败"
                     }
                 case .failure(let error):
@@ -1745,28 +1856,29 @@ struct UserManagementView: View {
 
     func addUser(_ user: UserItem) {
         isLoading = true
-        let params: [String: Any] = [
+        let params: [String: Any?] = [
             "user_name": user.user_name,
             "user_displayname": user.user_displayname,
             "user_password": user.user_password,
-            "user_phone": user.user_phone ?? "",
+            "user_phone": user.user_phone,
             "user_type": user.user_type,
             "user_enabled": user.user_enabled,
             "user_role": user.user_role
         ]
-        HttpClient.shared.post(url: "\(apiUrl)/user/add", body: params) { result in
+        vm.post(path: "/user/add", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(UserResponse.self, from: data) {
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
                         if resp.code == 1 {
                             showAddUser = false
                             Task { await refresh() }
                         } else {
                             vm.errorMessage = resp.message
                         }
-                    } else {
+                    } catch {
                         vm.errorMessage = "添加失败"
                     }
                 case .failure(let error):
@@ -1778,29 +1890,30 @@ struct UserManagementView: View {
 
     func updateUser(_ user: UserItem) {
         isLoading = true
-        let params: [String: Any] = [
+        let params: [String: Any?] = [
             "user_id": user.user_id,
             "user_name": user.user_name,
             "user_displayname": user.user_displayname,
             "user_password": user.user_password,
-            "user_phone": user.user_phone ?? "",
+            "user_phone": user.user_phone,
             "user_type": user.user_type,
             "user_enabled": user.user_enabled,
             "user_role": user.user_role
         ]
-        HttpClient.shared.post(url: "\(apiUrl)/user/update", body: params) { result in
+        vm.post(path: "/user/update", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(UserResponse.self, from: data) {
+                    do{
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
                         if resp.code == 1 {
                             editUser = nil
                             Task { await refresh() }
                         } else {
                             vm.errorMessage = resp.message
                         }
-                    } else {
+                    } catch {
                         vm.errorMessage = "修改失败"
                     }
                 case .failure(let error):
@@ -1812,22 +1925,65 @@ struct UserManagementView: View {
 
     func deleteUser(_ user: UserItem) {
         isLoading = true
-        let params: [String: Any] = [
+        let params: [String: Any?] = [
             "user_id": user.user_id
         ]
-        HttpClient.shared.post(url: "\(apiUrl)/user/delete", body: params) { result in
+        vm.post(path: "/user/delete", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(UserResponse.self, from: data) {
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
                         if resp.code == 1 {
                             Task { await refresh() }
                         } else {
                             vm.errorMessage = resp.message
                         }
-                    } else {
+                    } catch {
                         vm.errorMessage = "删除失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    // 将 /user/set_gateways 请求放到父视图统一处理
+    func setUserGateways(userId: Int, gatewayType: Int, gatewayIds: [Int]) {
+        isLoading = true
+        var params: [String: Any?] = [
+            "user_id": userId,
+            "user_gatewaytype": gatewayType
+        ]
+
+        if gatewayType == 2 {
+            do {
+                let data = try JSONSerialization.data(withJSONObject: gatewayIds, options: [])
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    params["user_gateways"] = jsonString // -> "[1,2,3]"
+                }
+            } catch {
+                vm.errorMessage = "序列化 gatewayIds 失败: \(error.localizedDescription)"
+                return
+            }
+        }
+        vm.post(path: "/user/set_gateways", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            setGatewaysUser = nil
+                            Task { await refresh() }
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "保存失败"
                     }
                 case .failure(let error):
                     vm.errorMessage = "网络错误: \(error.localizedDescription)"
@@ -1837,13 +1993,165 @@ struct UserManagementView: View {
     }
 }
 
+// SetUserGatewaysView：仅负责 UI，onSave 回调交给父视图执行保存
+struct SetUserGatewaysView: View {
+    @ObservedObject var vm: LinPhoneViewModel
+    let user: UserItem
+    var onSave: (_ userId: Int, _ gatewayType: Int, _ gatewayIds: [Int]) -> Void
+    var onCancel: () -> Void
+    
+
+    @State private var gateways: [GatewayItem] = []
+    @State private var isLoading = false
+    @State private var gatewayType: Int = 1 // 1 全部, 2 部分
+    @State private var selectedGatewayIds: Set<Int> = []
+    @State private var initialLoaded = false
+    @State private var isSaving = false
+
+    var body: some View {
+        NavigationView {
+            VStack {
+                Form {
+                    Section(header: Text("落地网关范围")) {
+                        Picker("类型", selection: $gatewayType) {
+                            Text("全部").tag(1)
+                            Text("部分").tag(2)
+                        }
+                        .pickerStyle(MenuPickerStyle())
+                    }
+
+                    if gatewayType == 2 {
+                        Section(header: Text("选择网关")) {
+                            if isLoading {
+                                HStack { Spacer(); ProgressView(); Spacer() }
+                            } else if gateways.isEmpty {
+                                Text("没有可用网关").foregroundColor(.gray)
+                            } else {
+                                ForEach(gateways) { gw in
+                                    Toggle(isOn: Binding(
+                                        get: { selectedGatewayIds.contains(gw.gateway_id) },
+                                        set: { on in
+                                            if on { selectedGatewayIds.insert(gw.gateway_id) }
+                                            else { selectedGatewayIds.remove(gw.gateway_id) }
+                                        }
+                                    )) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(gw.gateway_name)
+                                                .font(.subheadline)
+                                            Text("\(gw.gateway_host):\(gw.gateway_port)")
+                                                .font(.caption2)
+                                                .foregroundColor(.gray)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer()
+            }
+            .navigationTitle("设置落地网关")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消", action: { onCancel() })
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(action: {
+                        isSaving = true
+                        // 由父视图执行网络保存，传回去后关闭 sheet（父视图处理刷新）
+                        onSave(user.user_id, gatewayType, Array(selectedGatewayIds))
+                        // 由父视图刷新用户列表后关闭 sheet；这里本地提前结束保存状态
+                        isSaving = false
+                        onCancel()
+                    }) {
+                        Text(isSaving ? "保存中..." : "保存")
+                    }
+                    .disabled(isSaving)
+                }
+            }
+            .onAppear {
+                if !initialLoaded {
+                    initialLoaded = true
+                    loadGateways()
+                    loadUserInfoAndInit()
+                }
+            }
+            .overlay(
+                Group {
+                    if let err = vm.errorMessage {
+                        ToastView(message: err).zIndex(200)
+                    }
+                }
+            )
+        }
+    }
+
+    func loadGateways() {
+        isLoading = true
+        let params: [String: Any?] = ["page": 1, "limit": 1000]
+        vm.post(path: "/gateway/list", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let gatewayListResp = try JSONDecoder().decode(GatewayListResponse.self, from: data)
+                            gateways = gatewayListResp.data
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func loadUserInfoAndInit() {
+        isLoading = true
+        let params: [String: Any?] = ["user_id": user.user_id]
+        vm.post(path: "/user/info", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let userInfoResp = try JSONDecoder().decode(UserInfoResponse.self, from: data)
+                            let u = userInfoResp.data
+                            gatewayType = u.user_gatewaytype ?? 2
+                            selectedGatewayIds = Set(u.user_gateways ?? [])
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
+
+
 // 添加/编辑用户弹窗
 struct AddEditUserView: View {
     @ObservedObject var vm: LinPhoneViewModel
-    var user: UserItem?
+    var user: UserItem? // 传入时只带 user_id 用于编辑场景
     var onSave: (UserItem) -> Void
     var onCancel: () -> Void
 
+    @State private var userId: Int = 0
     @State private var userName: String = ""
     @State private var displayName: String = ""
     @State private var password: String = ""
@@ -1851,6 +2159,9 @@ struct AddEditUserView: View {
     @State private var userType: Int = 2
     @State private var userEnabled: Int = 1
     @State private var userRole: Int = 2
+
+    @State private var isLoading = false
+    @State private var initialLoaded = false
 
     let typeOptions = [
         (name: "内部", value: 1),
@@ -1869,35 +2180,42 @@ struct AddEditUserView: View {
 
     var body: some View {
         NavigationView {
-            Form {
-                Section(header: Text("用户信息")) {
-                    if isEdit {
-                        TextField("账号", text: $userName)
-                            .disabled(true)
-                            .foregroundColor(.gray)
-                    } else {
-                        TextField("账号", text: $userName)
-                            .textInputAutocapitalization(.never)
-                    }
-                    TextField("显示名称", text: $displayName)
-                    SecureField("密码", text: $password)
-                    TextField("手机号（可选）", text: $phone)
-                        .keyboardType(.phonePad)
-                    Picker("类型", selection: $userType) {
-                        ForEach(typeOptions, id: \.value) { option in
-                            Text(option.name).tag(option.value)
+            ZStack {
+                Form {
+                    Section(header: Text("用户信息")) {
+                        if isEdit {
+                            TextField("账号", text: $userName)
+                                .disabled(true)
+                                .foregroundColor(.gray)
+                        } else {
+                            TextField("账号", text: $userName)
+                                .textInputAutocapitalization(.never)
+                        }
+                        TextField("显示名称", text: $displayName)
+                        SecureField("密码", text: $password)
+                        TextField("手机号（可选）", text: $phone)
+                            .keyboardType(.phonePad)
+                        Picker("类型", selection: $userType) {
+                            ForEach(typeOptions, id: \.value) { option in
+                                Text(option.name).tag(option.value)
+                            }
+                        }
+                        Picker("状态", selection: $userEnabled) {
+                            ForEach(enabledOptions, id: \.value) { option in
+                                Text(option.name).tag(option.value)
+                            }
+                        }
+                        Picker("角色", selection: $userRole) {
+                            ForEach(roleOptions, id: \.value) { option in
+                                Text(option.name).tag(option.value)
+                            }
                         }
                     }
-                    Picker("状态", selection: $userEnabled) {
-                        ForEach(enabledOptions, id: \.value) { option in
-                            Text(option.name).tag(option.value)
-                        }
-                    }
-                    Picker("角色", selection: $userRole) {
-                        ForEach(roleOptions, id: \.value) { option in
-                            Text(option.name).tag(option.value)
-                        }
-                    }
+                }
+
+                if isLoading {
+                    Color.black.opacity(0.15).ignoresSafeArea()
+                    ProgressView("加载中...").padding().background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemBackground)))
                 }
             }
             .navigationTitle(isEdit ? "修改用户" : "添加用户")
@@ -1909,43 +2227,79 @@ struct AddEditUserView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isEdit ? "保存" : "添加") {
                         let newUser = UserItem(
-                            user_id: user?.user_id ?? 0,
+                            user_id: userId,
                             user_name: userName,
                             user_password: password,
-                            user_displayname: displayName,
+                            user_displayname: displayName.isEmpty ? nil : displayName,
                             user_phone: phone.isEmpty ? nil : phone,
                             user_type: userType,
                             user_enabled: userEnabled,
-                            user_role: userRole
+                            user_role: userRole,
+                            user_gatewaytype: nil,
+                            user_gateways: nil
                         )
                         onSave(newUser)
                     }
-                    .disabled(userName.isEmpty || displayName.isEmpty || password.isEmpty)
+                    .disabled(userName.isEmpty || (!isEdit && password.isEmpty))
                 }
             }
             .onAppear {
-                if let u = user {
-                    userName = u.user_name
-                    displayName = u.user_displayname ?? ""
-                    password = u.user_password
-                    phone = u.user_phone ?? ""
-                    userType = u.user_type
-                    userEnabled = u.user_enabled
-                    userRole = u.user_role
+                if isEdit && !initialLoaded {
+                    initialLoaded = true
+                    userId = user?.user_id ?? 0
+                    loadUserInfoAndInit()
+                } else if !isEdit && !initialLoaded {
+                    initialLoaded = true
+                    // 新增时保持默认空字段
+                }
+            }
+            .overlay(
+                Group {
+                    if let err = vm.errorMessage {
+                        ToastView(message: err).zIndex(200)
+                    }
+                }
+            )
+        }
+    }
+
+    func loadUserInfoAndInit() {
+        guard let uid = user?.user_id else { return }
+        isLoading = true
+        let params: [String: Any?] = ["user_id": uid]
+        vm.post(path: "/user/info", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let userInfoResp = try JSONDecoder().decode(UserInfoResponse.self, from: data)
+                            let u = userInfoResp.data
+                            userId = u.user_id
+                            userName = u.user_name
+                            displayName = u.user_displayname ?? ""
+                            // 后端可能不返回密码，保持空则表示不修改
+                            password = u.user_password
+                            phone = u.user_phone ?? ""
+                            userType = u.user_type
+                            userEnabled = u.user_enabled
+                            userRole = u.user_role
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
                 }
             }
         }
-        .overlay(
-            Group {
-                if let error = vm.errorMessage {
-                    ToastView(message: error)
-                        .transition(.opacity)
-                        .zIndex(200)
-                }
-            }
-        )
     }
 }
+
 
 
 struct GatewayItem: Identifiable, Decodable {
@@ -1964,9 +2318,11 @@ struct GatewayItem: Identifiable, Decodable {
     var id: Int { gateway_id }
 }
 
-struct GatewayResponse: Decodable {
+
+struct GatewayInfoResponse: Decodable {
     let code: Int
     let message: String
+    let data: GatewayItem
 }
 
 struct GatewayListResponse: Decodable {
@@ -1987,43 +2343,47 @@ struct GatewayManagementView: View {
     @State private var isRefreshing = false
     @State private var showAddGateway = false
     @State private var editGateway: GatewayItem? = nil
+    @State private var showRouteForGateway: GatewayItem? = nil
 
     var body: some View {
-        NavigationView {
+        //NavigationView {
             List {
                 ForEach(gateways) { gateway in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(gateway.gateway_name)
-                                .font(.headline)
-                            Spacer()
-                            Text(gateway.gateway_enabled == 1 ? "启用" : "禁用")
-                                .font(.caption)
-                                .foregroundColor(gateway.gateway_enabled == 1 ? .green : .red)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill((gateway.gateway_enabled == 1 ? Color.green : Color.red).opacity(0.12))
-                                )
-                        }
-                        Text("类型: \(gateway.gateway_type == 1 ? "SIP" : "H323") 认证: \(gateway.gateway_authtype == 1 ? "帐号" : "IP")")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        Text("地址: \(gateway.gateway_host):\(gateway.gateway_port) Realm: \(gateway.gateway_realm)")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        Text("用户名: \(gateway.gateway_username)")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        if let remark = gateway.gateway_remark, !remark.isEmpty {
-                            Text("备注: \(remark)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                    NavigationLink(destination: GatewayDetailView(vm: vm, gatewayId: gateway.gateway_id)) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(gateway.gateway_name)
+                                    .font(.headline)
+                                Spacer()
+                                Text(gateway.gateway_enabled == 1 ? "启用" : "禁用")
+                                    .font(.caption)
+                                    .foregroundColor(gateway.gateway_enabled == 1 ? .green : .red)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill((gateway.gateway_enabled == 1 ? Color.green : Color.red).opacity(0.12))
+                                    )
+                            }
+                            Text("类型: \(gateway.gateway_type == 1 ? "SIP" : "H323") 认证: \(gateway.gateway_authtype == 1 ? "帐号" : "IP")")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            Text("地址: \(gateway.gateway_host):\(gateway.gateway_port) Realm: \(gateway.gateway_realm)")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            Text("用户名: \(gateway.gateway_username)")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            if let remark = gateway.gateway_remark, !remark.isEmpty {
+                                Text("备注: \(remark)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                     .padding(.vertical, 6)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        
                         Button(role: .destructive) {
                             deleteGateway(gateway)
                         } label: {
@@ -2035,7 +2395,14 @@ struct GatewayManagementView: View {
                             Label("编辑", systemImage: "pencil")
                         }
                         .tint(.orange)
+                        Button {
+                            showRouteForGateway = gateway
+                        } label: {
+                            Label("路由", systemImage: "arrow.triangle.branch")
+                        }
+                        .tint(.blue)
                     }
+                    
                 }
                 // 底部加载更多
                 if gateways.count < totalCount && !isLoading {
@@ -2093,12 +2460,16 @@ struct GatewayManagementView: View {
                     onCancel: { editGateway = nil }
                 )
             }
+            .sheet(item: $showRouteForGateway) { gw in
+                
+                RouteManagementView(vm: vm, gateway: gw)
+            }
             .onAppear {
                 if gateways.isEmpty {
                     Task { await refresh() }
                 }
             }
-        }
+        //}
     }
 
     func refresh() async {
@@ -2116,25 +2487,27 @@ struct GatewayManagementView: View {
 
     func fetchGateways(reset: Bool) {
         isLoading = true
-        let params = ["page": page, "limit": limit]
-        HttpClient.shared.post(url: "\(apiUrl)/gateway/list", body: params) { result in
+        let params: [String: Any?] = ["page": page, "limit": limit]
+        vm.post(path: "/gateway/list", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    print("Gateway list response: \(String(data: data, encoding: .utf8) ?? "")")
-                    if let resp = try? JSONDecoder().decode(GatewayListResponse.self, from: data) {
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
                         if resp.code == 1 {
-                            totalCount = resp.total
+                            let gatewayListResp = try JSONDecoder().decode(GatewayListResponse.self, from: data)
+                            totalCount = gatewayListResp.total
                             if reset {
-                                gateways = resp.data
+                                gateways = gatewayListResp.data
                             } else {
-                                gateways += resp.data
+                                gateways += gatewayListResp.data
                             }
                         } else {
                             vm.errorMessage = resp.message
                         }
-                    } else {
+                    } 
+                    catch {
                         vm.errorMessage = "数据解析失败"
                     }
                 case .failure(let error):
@@ -2153,7 +2526,7 @@ struct GatewayManagementView: View {
 
     func addGateway(_ gateway: GatewayItem) {
         isLoading = true
-        let params: [String: Any] = [
+        let params: [String: Any?] = [
             "gateway_name": gateway.gateway_name,
             "gateway_type": gateway.gateway_type,
             "gateway_host": gateway.gateway_host,
@@ -2165,19 +2538,21 @@ struct GatewayManagementView: View {
             "gateway_enabled": gateway.gateway_enabled,
             "gateway_remark": gateway.gateway_remark
         ]
-        HttpClient.shared.post(url: "\(apiUrl)/gateway/add", body: params) { result in
+        vm.post(path: "/gateway/add", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(GatewayResponse.self, from: data) {
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
                         if resp.code == 1 {
                             showAddGateway = false
                             Task { await refresh() }
                         } else {
                             vm.errorMessage = resp.message
                         }
-                    } else {
+                    } 
+                    catch {
                         vm.errorMessage = "添加失败"
                     }
                 case .failure(let error):
@@ -2189,7 +2564,7 @@ struct GatewayManagementView: View {
 
     func updateGateway(_ gateway: GatewayItem) {
         isLoading = true
-        let params: [String: Any] = [
+        let params: [String: Any?] = [
             "gateway_id": gateway.gateway_id,
             "gateway_name": gateway.gateway_name,
             "gateway_type": gateway.gateway_type,
@@ -2202,19 +2577,21 @@ struct GatewayManagementView: View {
             "gateway_enabled": gateway.gateway_enabled,
             "gateway_remark": gateway.gateway_remark
         ]
-        HttpClient.shared.post(url: "\(apiUrl)/gateway/update", body: params) { result in
+        vm.post(path: "/gateway/update", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(GatewayResponse.self, from: data) {
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
                         if resp.code == 1 {
                             editGateway = nil
                             Task { await refresh() }
                         } else {
                             vm.errorMessage = resp.message
                         }
-                    } else {
+                    } 
+                    catch {
                         vm.errorMessage = "修改失败"
                     }
                 case .failure(let error):
@@ -2226,21 +2603,22 @@ struct GatewayManagementView: View {
 
     func deleteGateway(_ gateway: GatewayItem) {
         isLoading = true
-        let params: [String: Any] = [
+        let params: [String: Any?] = [
             "gateway_id": gateway.gateway_id
         ]
-        HttpClient.shared.post(url: "\(apiUrl)/gateway/delete", body: params) { result in
+        vm.post(path: "/gateway/delete", body: params) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let data):
-                    if let resp = try? JSONDecoder().decode(GatewayResponse.self, from: data) {
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
                         if resp.code == 1 {
                             Task { await refresh() }
                         } else {
                             vm.errorMessage = resp.message
                         }
-                    } else {
+                    } catch {
                         vm.errorMessage = "删除失败"
                     }
                 case .failure(let error):
@@ -2250,6 +2628,279 @@ struct GatewayManagementView: View {
         }
     }
 }
+
+// ...existing code...
+
+// MARK: - /gateway/stat 响应数据结构
+struct GatewayStatResponse: Decodable {
+    let code: Int
+    let message: String
+    let data: GatewayStatData
+}
+
+struct GatewayStatData: Decodable {
+    let summary: GatewaySummary?
+    let finalcodes: [FinalCodeItem]?
+    let hangupBreakdown: [HangupBreakdownItem]?
+    let errorBreakdown: [ErrorBreakdownItem]?
+    let daily: [DailyStatItem]?
+    let from: String?
+    let to: String?
+}
+
+struct GatewaySummary: Decodable {
+    let total_calls: String
+    let answered_calls: String
+    let asr_percent: String
+    let total_answered_seconds: Int
+    let avg_answered_seconds: String
+}
+
+struct FinalCodeItem: Decodable, Identifiable {
+    let call_finalcode: Int?
+    let cnt: String
+    var id: Int { call_finalcode ?? 0 }
+}
+
+struct HangupBreakdownItem: Decodable, Identifiable {
+    let hangup_cause: Int
+    let cnt: String
+    var id: Int { hangup_cause }
+}
+
+struct ErrorBreakdownItem: Decodable, Identifiable {
+    let error_cause: Int
+    let cnt: String
+    var id: Int { error_cause }
+}
+
+struct DailyStatItem: Decodable, Identifiable {
+    let day: String
+    let total_calls: String
+    let answered_calls: String
+    var id: String { day }
+}
+
+
+
+// MARK: - 网关详情页
+struct GatewayDetailView: View {
+    @ObservedObject var vm: LinPhoneViewModel
+    let gatewayId: Int
+
+    @State private var gateway: GatewayItem?
+    @State private var stats: GatewayStatData?
+    @State private var isLoadingInfo = false
+    @State private var isLoadingStats = false
+    @State private var initialLoaded = false
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                // 基本信息
+                GroupBox(label: Text("网关信息")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let g = gateway {
+                            HStack {
+                                Text(g.gateway_name).font(.headline)
+                                Spacer()
+                                Text(g.gateway_enabled == 1 ? "启用" : "禁用")
+                                    .font(.caption)
+                                    .foregroundColor(g.gateway_enabled == 1 ? .green : .red)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(RoundedRectangle(cornerRadius: 8).fill((g.gateway_enabled == 1 ? Color.green : Color.red).opacity(0.12)))
+                            }
+                            Text("类型: \(g.gateway_type == 1 ? "SIP" : "H323")")
+                            Text("地址: \(g.gateway_host):\(g.gateway_port)")
+                            Text("Realm: \(g.gateway_realm)")
+                            Text("用户名: \(g.gateway_username)")
+                            Text("备注: \(g.gateway_remark ?? "")").foregroundColor(.secondary)
+                        } else if isLoadingInfo {
+                            ProgressView("加载中...")
+                        } else {
+                            Text("暂无网关信息").foregroundColor(.secondary)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                // 统计摘要
+                GroupBox(label: Text("统计摘要")) {
+                    if isLoadingStats {
+                        HStack { Spacer(); ProgressView(); Spacer() }
+                    } else if let s = stats?.summary {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                MetricView(title: "总通话", value: s.total_calls)
+                                MetricView(title: "已接通", value: s.answered_calls)
+                                MetricView(title: "ASR", value: s.asr_percent)
+                            }
+                            HStack {
+                                MetricView(title: "总接通秒数", value: String(s.total_answered_seconds))
+                                MetricView(title: "平均接通秒数", value: s.avg_answered_seconds)
+                            }
+                        }
+                    } else {
+                        Text("暂无统计数据").foregroundColor(.secondary)
+                    }
+                }
+
+                // 细分统计：finalcodes / hangup / error
+                if let finalcodes = stats?.finalcodes, !finalcodes.isEmpty {
+                    GroupBox(label: Text("最终响应码分布")) {
+                        ForEach(finalcodes) { item in
+                            HStack {
+                                if let code = item.call_finalcode {
+                                    Text(finalCodeText(code))
+                                } else {
+                                    Text("未知")
+                                }
+                                Spacer()
+                                Text(item.cnt).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if let hangups = stats?.hangupBreakdown, !hangups.isEmpty {
+                    GroupBox(label: Text("挂断原因")) {
+                        ForEach(hangups) { item in
+                            HStack {
+                                Text(hangupCauseText(item.hangup_cause))
+                                Spacer()
+                                Text(item.cnt).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if let errors = stats?.errorBreakdown, !errors.isEmpty {
+                    GroupBox(label: Text("错误统计")) {
+                        ForEach(errors) { item in
+                            HStack {
+                                Text(errorCauseText(item.error_cause))
+                                Spacer()
+                                Text(item.cnt).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                // 每日趋势
+                GroupBox(label: Text("每日统计")) {
+                    if let daily = stats?.daily, !daily.isEmpty {
+                        VStack(spacing: 6) {
+                            ForEach(daily) { day in
+                                HStack {
+                                    Text(formatUtcString(day.day)) // 使用已有日期格式化函数
+                                    Spacer()
+                                    Text("总: \(day.total_calls)").foregroundColor(.secondary)
+                                    Text("接: \(day.answered_calls)").foregroundColor(.green)
+                                }.font(.caption)
+                            }
+                        }
+                    } else {
+                        Text("暂无每日数据").foregroundColor(.secondary)
+                    }
+                }
+
+            }
+            .padding()
+        }
+        .navigationTitle("网关详情")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if !initialLoaded {
+                initialLoaded = true
+                loadInfo()
+                loadStats()
+            }
+        }
+        .refreshable {
+            loadInfo()
+            loadStats()
+        }
+        .overlay(
+            Group {
+                if let err = vm.errorMessage {
+                    ToastView(message: err)
+                }
+            }
+        )
+    }
+
+    func loadInfo() {
+        isLoadingInfo = true
+        let params: [String: Any?] = ["gateway_id": gatewayId]
+        vm.post(path: "/gateway/info", body: params) { result in
+            DispatchQueue.main.async {
+                isLoadingInfo = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let infoResp = try JSONDecoder().decode(GatewayInfoResponse.self, from: data)
+                            gateway = infoResp.data
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "解析网关信息失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func loadStats() {
+        isLoadingStats = true
+        let params: [String: Any?] = ["gateway_id": gatewayId]
+        vm.post(path: "/gateway/stat", body: params) { result in
+            DispatchQueue.main.async {
+                isLoadingStats = false
+                switch result {
+                case .success(let data):
+                    do {
+                        print("Received data: \(String(data: data, encoding: .utf8) ?? "nil")")
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let statResp = try JSONDecoder().decode(GatewayStatResponse.self, from: data)
+                            stats = statResp.data
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "解析数据失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
+// 小控件：展示单个指标
+private struct MetricView: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack {
+            Text(value).font(.headline)
+            Text(title).font(.caption).foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(.systemGray6)))
+    }
+}
+
+
+// ...existing code...
 
 struct AddEditGatewayView: View {
     @ObservedObject var vm: LinPhoneViewModel
@@ -2268,6 +2919,9 @@ struct AddEditGatewayView: View {
     @State private var gatewayRemark: String = ""
     @State private var gatewayEnabled: Int = 1 // 默认启用
 
+    @State private var isLoading = false
+    @State private var initialLoaded = false
+
     let gatewayTypeOptions = [
         (name: "SIP网关", value: 1),
         (name: "H323网关", value: 2)
@@ -2285,31 +2939,40 @@ struct AddEditGatewayView: View {
 
     var body: some View {
         NavigationView {
-            Form {
-                Section(header: Text("网关信息")) {
-                    TextField("网关名称", text: $gatewayName)
-                    Picker("类型", selection: $gatewayType) {
-                        ForEach(gatewayTypeOptions, id: \.value) { option in
-                            Text(option.name).tag(option.value)
+            ZStack {
+                Form {
+                    Section(header: Text("网关信息")) {
+                        TextField("网关名称", text: $gatewayName)
+                        Picker("类型", selection: $gatewayType) {
+                            ForEach(gatewayTypeOptions, id: \.value) { option in
+                                Text(option.name).tag(option.value)
+                            }
                         }
-                    }
-                    TextField("主机地址", text: $gatewayHost)
-                    TextField("端口", text: $gatewayPort)
-                        .keyboardType(.numberPad)
-                    TextField("Realm", text: $gatewayRealm)
-                    TextField("用户名", text: $gatewayUsername)
-                    SecureField("密码", text: $gatewayPassword)
-                    Picker("认证方式", selection: $gatewayAuthtype) {
-                        ForEach(authtypeOptions, id: \.value) { option in
-                            Text(option.name).tag(option.value)
+                        TextField("主机地址", text: $gatewayHost)
+                            .textInputAutocapitalization(.never)
+                        TextField("端口", text: $gatewayPort)
+                            .keyboardType(.numberPad)
+                        TextField("Realm", text: $gatewayRealm)
+                        TextField("用户名", text: $gatewayUsername)
+                            .textInputAutocapitalization(.never)
+                        SecureField("密码", text: $gatewayPassword)
+                        Picker("认证方式", selection: $gatewayAuthtype) {
+                            ForEach(authtypeOptions, id: \.value) { option in
+                                Text(option.name).tag(option.value)
+                            }
                         }
-                    }
-                    Picker("状态", selection: $gatewayEnabled) {
-                        ForEach(enabledOptions, id: \.value) { option in
-                            Text(option.name).tag(option.value)
+                        Picker("状态", selection: $gatewayEnabled) {
+                            ForEach(enabledOptions, id: \.value) { option in
+                                Text(option.name).tag(option.value)
+                            }
                         }
+                        TextField("备注（可选）", text: $gatewayRemark)
                     }
-                    TextField("备注（可选）", text: $gatewayRemark)
+                }
+
+                if isLoading {
+                    Color.black.opacity(0.12).ignoresSafeArea()
+                    ProgressView("加载中...").padding().background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemBackground)))
                 }
             }
             .navigationTitle(isEdit ? "编辑网关" : "添加网关")
@@ -2335,33 +2998,66 @@ struct AddEditGatewayView: View {
                         )
                         onSave(newGateway)
                     }
-                    .disabled(gatewayName.isEmpty || gatewayHost.isEmpty || gatewayPort.isEmpty || gatewayUsername.isEmpty || gatewayPassword.isEmpty)
+                    .disabled(gatewayName.isEmpty || gatewayHost.isEmpty || gatewayPort.isEmpty || gatewayUsername.isEmpty)
                 }
             }
             .onAppear {
-                if let g = gateway {
-                    gatewayName = g.gateway_name
-                    gatewayType = g.gateway_type
-                    gatewayHost = g.gateway_host
-                    gatewayPort = "\(g.gateway_port)"
-                    gatewayRealm = g.gateway_realm
-                    gatewayUsername = g.gateway_username
-                    gatewayPassword = g.gateway_password
-                    gatewayAuthtype = g.gateway_authtype
-                    gatewayRemark = g.gateway_remark ?? ""
-                    gatewayEnabled = g.gateway_enabled
+                if isEdit && !initialLoaded {
+                    initialLoaded = true
+                    loadGatewayInfoAndInit()
+                } else if !isEdit && !initialLoaded {
+                    initialLoaded = true
+                    // 新增模式保持默认值
+                }
+            }
+            .overlay(
+                Group {
+                    if let error = vm.errorMessage {
+                        ToastView(message: error)
+                            .transition(.opacity)
+                            .zIndex(200)
+                    }
+                }
+            )
+        }
+    }
+
+    // 通过 /gateway/info 获取网关详情并初始化表单
+    func loadGatewayInfoAndInit() {
+        guard let gid = gateway?.gateway_id else { return }
+        isLoading = true
+        let params: [String: Any?] = ["gateway_id": gid]
+        vm.post(path: "/gateway/info", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let gatewayInfoResp = try JSONDecoder().decode(GatewayInfoResponse.self, from: data)
+                            let g = gatewayInfoResp.data
+                            gatewayName = g.gateway_name
+                            gatewayType = g.gateway_type
+                            gatewayHost = g.gateway_host
+                            gatewayPort = "\(g.gateway_port)"
+                            gatewayRealm = g.gateway_realm
+                            gatewayUsername = g.gateway_username
+                            gatewayPassword = g.gateway_password
+                            gatewayAuthtype = g.gateway_authtype
+                            gatewayEnabled = g.gateway_enabled
+                            gatewayRemark = g.gateway_remark ?? ""
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
                 }
             }
         }
-        .overlay(
-            Group {
-                if let error = vm.errorMessage {
-                    ToastView(message: error)
-                        .transition(.opacity)
-                        .zIndex(200)
-                }
-            }
-        )
     }
 }
 
@@ -2394,140 +3090,745 @@ struct CallListResponse: Decodable {
     let total: Int
 }
 
+func hangupCauseText(_ cause: Int) -> String {
+    switch cause {
+    case 1: return "正常"
+    case 2: return "取消"
+    case 3: return "拒绝"
+    case 4: return "忙"
+    case 5: return "未接听"
+    case 6: return "错误"
+    default: return "-"
+    }
+}
+
+func errorCauseText(_ cause: Int) -> String {
+    switch cause {
+    case 1: return "呼叫时系统错误"
+    case 2: return "接通时系统错误"
+    case 3: return "呼叫时错误码"
+    case 4: return "接通时错误码"
+    default: return "-"
+    }
+}
+
+// ...existing code...
 struct CallQueryView: View {
+    @ObservedObject var vm: LinPhoneViewModel
     @State private var calls: [CallItem] = []
     @State private var isLoading = false
     @State private var page = 1
     @State private var limit = 20
     @State private var totalCount = 0
+    @State private var isRefreshing = false
 
     var body: some View {
-        NavigationView {
+        //NavigationView {
             List {
                 ForEach(calls) { call in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(call.call_direction == 1 ? "呼入" : (call.call_direction == 2 ? "呼出" : "内部"))
-                                .font(.headline)
-                                .foregroundColor(call.call_direction == 1 ? .green : (call.call_direction == 2 ? .blue : .gray))
-                            Spacer()
-                            Text(call.call_status == 2 ? "已接通" : "未接通")
-                                .font(.caption)
-                                .foregroundColor(call.call_status == 2 ? .green : .red)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill((call.call_status == 2 ? Color.green : Color.red).opacity(0.12))
-                                )
-                        }
-                        Text("主叫: \(call.call_fromuri)")
-                            .font(.subheadline)
+                    NavigationLink(destination: CallDetailView(vm: vm, call: call)) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(call.call_direction == 1 ? "呼入" : (call.call_direction == 2 ? "呼出" : "内部"))
+                                    .font(.headline)
+                                    .foregroundColor(call.call_direction == 1 ? .green : (call.call_direction == 2 ? .blue : .gray))
+                                Spacer()
+                                Text(call.call_status == 2 ? "已接通" : "未接通")
+                                    .font(.caption)
+                                    .foregroundColor(call.call_status == 2 ? .green : .red)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill((call.call_status == 2 ? Color.green : Color.red).opacity(0.12))
+                                    )
+                            }
+                            Text("主叫: \(call.call_fromuri)")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            Text("被叫: \(call.call_touri)")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            Text("网关: \(call.call_gatewayname ?? "")")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            HStack(spacing: 16) {
+                                Text("时长: \(call.call_duration ?? 0)秒")
+                            }
+                            .font(.caption2)
                             .foregroundColor(.gray)
-                        Text("被叫: \(call.call_touri)")
-                            .font(.subheadline)
+                            HStack(spacing: 16) {
+                                Text("挂断原因: \(hangupCauseText(call.call_hangupcause ?? 0))")
+                                Text("最终响应: \(call.call_finalcode ?? 0)")
+                            }
+                            .font(.caption2)
                             .foregroundColor(.gray)
-                        Text("网关: \(call.call_gatewayname ?? "")")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        HStack(spacing: 16) {
-                            /*Text("开始: \(formatDate(call.call_starttime))")*/
-                            Text("时长: \(call.call_duration ?? 0)秒")
                         }
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                        HStack(spacing: 16) {
-                            Text("挂断原因: \(hangupCauseText(call.call_hangupcause ?? 0))")
-                            Text("最终响应: \(call.call_finalcode ?? 0)")
-                        }
-                        .font(.caption2)
-                        .foregroundColor(.gray)
+                        .padding(.vertical, 8)
                     }
-                    .padding(.vertical, 8)
+                    .buttonStyle(PlainButtonStyle())
                 }
-                // 底部加载更多
+
                 if calls.count < totalCount && !isLoading {
                     HStack {
                         Spacer()
                         ProgressView()
-                            .onAppear {
-                                loadMore()
-                            }
+                            .onAppear { loadMore() }
                         Spacer()
                     }
                 }
             }
             .navigationTitle("通话查询")
+            .refreshable {
+                await refresh()
+            }
+            .overlay(
+                Group {
+                    if isLoading && calls.isEmpty {
+                        ProgressView("加载中...")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(.systemBackground).opacity(0.7))
+                    }
+                }
+            )
             .onAppear {
                 if calls.isEmpty {
-                    fetchCalls(reset: true)
+                    Task { await fetchCallsAsync(reset: true) }
                 }
             }
-            .refreshable {
-                fetchCalls(reset: true)
-            }
-        }
+        //}
     }
 
-    func fetchCalls(reset: Bool) {
-        isLoading = true
-        let params: [String: Any] = ["page": page, "limit": limit]
-        HttpClient.shared.post(url: "\(apiUrl)/call/list", body: params) { result in
-            DispatchQueue.main.async {
-                isLoading = false
-                switch result {
-                case .success(let data):
-                    print("Call list response: \(String(data: data, encoding: .utf8) ?? "")")
-                    if let resp = try? JSONDecoder().decode(CallListResponse.self, from: data) {
-                        totalCount = resp.total
-                        if reset {
-                            calls = resp.data
-                        } else {
-                            calls += resp.data
-                        }
-                    }
-                case .failure(_):
-                    // Handle error case
-                    calls = []
-                }
-            }
-        }
+    // 异步刷新入口，供 refreshable 调用
+    func refresh() async {
+        isRefreshing = true
+        page = 1
+        await fetchCallsAsync(reset: true)
+        isRefreshing = false
     }
 
     func loadMore() {
         guard !isLoading, calls.count < totalCount else { return }
         page += 1
-        fetchCalls(reset: false)
+        Task { await fetchCallsAsync(reset: false) }
     }
 
-    func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter.string(from: date)
-    }
-
-    func hangupCauseText(_ cause: Int) -> String {
-        switch cause {
-        case 1: return "正常"
-        case 2: return "取消"
-        case 3: return "拒绝"
-        case 4: return "忙"
-        case 5: return "未接听"
-        case 6: return "错误"
-        default: return "-"
+    // 使用 vm.post 的回调版本做实际请求
+    func fetchCalls(reset: Bool) {
+        if reset { page = 1 }
+        isLoading = true
+        let params: [String: Any?] = ["page": page, "limit": limit]
+        vm.post(path: "/call/list", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let callListResp = try JSONDecoder().decode(CallListResponse.self, from: data)
+                            totalCount = callListResp.total
+                            if reset {
+                                calls = callListResp.data
+                            } else {
+                                // 防止重复追加同一页
+                                if page == 1 {
+                                    calls = callListResp.data
+                                } else {
+                                    calls += callListResp.data
+                                }
+                            }
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 
-    func errorCauseText(_ cause: Int) -> String {
-        switch cause {
-        case 1: return "邀请系统错误"
-        case 2: return "桥接系统错误"
-        case 3: return "邀请UA错误码"
-        case 4: return "桥接UA错误码"
-        default: return "-"
+    // async/await 封装，便于 refreshable 使用
+    func fetchCallsAsync(reset: Bool) async {
+        await withCheckedContinuation { continuation in
+            fetchCalls(reset: reset)
+            continuation.resume()
         }
     }
 }
+// ...existing code...
+
+// 新增：通话详情页
+struct CallDetailView: View {
+    @ObservedObject var vm: LinPhoneViewModel
+    let call: CallItem
+    @Environment(\.presentationMode) var presentationMode
+    @State private var showingShare = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
+                Text(call.call_direction == 1 ? "呼入" : (call.call_direction == 2 ? "呼出" : "内部"))
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Text(call.call_fromuri)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("→  \(call.call_touri)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.top, 12)
+
+            GroupBox(label: Text("时间信息")) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack { Text("开始"); Spacer(); Text(formatUtcString(call.call_starttime)) }
+                    HStack { Text("应答"); Spacer(); Text(formatUtcString(call.call_answertime )) }
+                    HStack { Text("结束"); Spacer(); Text(formatUtcString(call.call_endtime)) }
+                    HStack { Text("通话时长"); Spacer(); Text("\(call.call_duration ?? 0) 秒") }
+                }
+                .font(.callout)
+            }
+
+            GroupBox(label: Text("通话详情")) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack { Text("状态"); Spacer(); Text((call.call_status == 2) ? "已接通" : "未接通") }
+                    HStack { Text("网关"); Spacer(); Text(call.call_gatewayname ?? "-") }
+                    HStack { Text("最终响应码"); Spacer(); Text("\(call.call_finalcode ?? 0)") }
+                    HStack { Text("挂断原因"); Spacer(); Text(hangupCauseText(call.call_hangupcause ?? 0)) }
+                }
+                .font(.callout)
+            }
+
+            HStack(spacing: 16) {
+                Button(action: {
+                    // 重新拨打被叫
+                    let target = call.call_touri
+                    vm.call(to: target)
+                }) {
+                    VStack {
+                        Image(systemName: "phone.arrow.up.right")
+                            .font(.title2)
+                            .frame(width: 48, height: 48)
+                            .background(Color.blue.opacity(0.12))
+                            .clipShape(Circle())
+                        Text("重拨").font(.caption)
+                    }
+                }
+
+                Button(action: {
+                    // 复制被叫
+                    UIPasteboard.general.string = call.call_touri
+                    vm.errorMessage = "已复制被叫"
+                }) {
+                    VStack {
+                        Image(systemName: "doc.on.doc")
+                            .font(.title2)
+                            .frame(width: 48, height: 48)
+                            .background(Color.gray.opacity(0.12))
+                            .clipShape(Circle())
+                        Text("复制").font(.caption)
+                    }
+                }
+
+                Button(action: {
+                    // 分享基本信息
+                    showingShare = true
+                }) {
+                    VStack {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.title2)
+                            .frame(width: 48, height: 48)
+                            .background(Color.green.opacity(0.12))
+                            .clipShape(Circle())
+                        Text("分享").font(.caption)
+                    }
+                }
+                .sheet(isPresented: $showingShare) {
+                    let text = shareText()
+                    ActivityView(activityItems: [text])
+                }
+            }
+            .padding(.top, 6)
+
+            Spacer()
+        }
+        .padding()
+        .navigationTitle("通话详情")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    func shareText() -> String {
+        var s = "通话详情\n"
+        s += "主叫: \(call.call_fromuri)\n"
+        s += "被叫: \(call.call_touri)\n"
+        s += "开始: \(call.call_starttime ?? "-")\n"
+        s += "结束: \(call.call_endtime ?? "-")\n"
+        s += "时长: \(call.call_duration ?? 0) 秒\n"
+        s += "挂断原因: \(hangupCauseText(call.call_hangupcause ?? 0))\n"
+        return s
+    }
+}
+
+struct ActivityView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    let applicationActivities: [UIActivity]? = nil
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        return UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+
+struct RouteItem: Identifiable, Decodable {
+    let route_id: Int
+    let route_name: String?
+    let route_gatewayid: Int
+    let route_matchtype: Int // 1 主叫前缀 2 被叫前缀
+    let route_matchvalue: String
+    let route_enabled: Int // 1启用 2禁用
+    let route_priority: Int?
+    let route_remark: String?
+
+    var id: Int { route_id }
+}
+
+
+struct RouteInfoResponse: Decodable {
+    let code: Int
+    let message: String
+    let data: RouteItem
+}
+
+struct RouteListResponse: Decodable {
+    let code: Int
+    let message: String
+    let data: [RouteItem]
+    let total: Int
+}
+
+// ...existing code...
+
+// 路由管理视图（列表 + 添加/修改/删除）
+struct RouteManagementView: View {
+    @ObservedObject var vm: LinPhoneViewModel
+    // 可传入 gateway 用于筛选（从网关页面进入时传递）
+    let gateway: GatewayItem?
+
+    @State private var routes: [RouteItem] = []
+    @State private var page = 1
+    @State private var limit = 20
+    @State private var totalCount = 0
+    @State private var isLoading = false
+    @State private var isRefreshing = false
+    @State private var showAddRoute = false
+    @State private var editRoute: RouteItem? = nil
+
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(routes) { r in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(r.route_name ?? "路由 \(r.route_id)")
+                                .font(.headline)
+                            Spacer()
+                            Text(r.route_enabled == 1 ? "启用" : "禁用")
+                                .font(.caption)
+                                .foregroundColor(r.route_enabled == 1 ? .green : .red)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 8).fill((r.route_enabled == 1 ? Color.green : Color.red).opacity(0.12)))
+                        }
+                        Text("匹配：\(r.route_matchtype == 1 ? "主叫前缀" : "被叫前缀") = \(r.route_matchvalue)")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        Text("网关 ID: \(r.route_gatewayid)  优先级: \(r.route_priority ?? 0)")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 6)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            deleteRoute(r)
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                        Button {
+                            editRoute = r
+                        } label: {
+                            Label("编辑", systemImage: "pencil")
+                        }
+                        .tint(.orange)
+                    }
+                }
+
+                if routes.count < totalCount && !isLoading {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .onAppear { loadMore() }
+                        Spacer()
+                    }
+                }
+            }
+            .navigationTitle(gateway == nil ? "路由管理" : "\(gateway!.gateway_name) 的路由")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showAddRoute = true
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+            .refreshable {
+                await refresh()
+            }
+            .overlay(
+                Group {
+                    if isLoading && routes.isEmpty {
+                        ProgressView("加载中...")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(.systemBackground).opacity(0.7))
+                    }
+                }
+            )
+            .sheet(isPresented: $showAddRoute) {
+                AddEditRouteView(vm: vm, route: nil, defaultGatewayId: gateway?.gateway_id, onSave: { newRoute in
+                    addRoute(newRoute)
+                }, onCancel: { showAddRoute = false })
+            }
+            .sheet(item: $editRoute) { r in
+                AddEditRouteView(vm: vm, route: r, defaultGatewayId: nil, onSave: { updated in
+                    updateRoute(updated)
+                }, onCancel: { editRoute = nil })
+            }
+            .onAppear {
+                if routes.isEmpty { Task { await refresh() } }
+            }
+        }
+    }
+
+    func refresh() async {
+        isRefreshing = true
+        page = 1
+        await fetchRoutes(reset: true)
+        isRefreshing = false
+    }
+
+    func loadMore() {
+        guard !isLoading, routes.count < totalCount else { return }
+        page += 1
+        fetchRoutes(reset: false)
+    }
+
+    func fetchRoutes(reset: Bool) {
+        if reset { page = 1 }
+        isLoading = true
+        var params: [String: Any?] = ["page": page, "limit": limit]
+        if let gw = gateway { params["route_gatewayid"] = gw.gateway_id }
+        vm.post(path: "/route/list", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let list = try JSONDecoder().decode(RouteListResponse.self, from: data)
+                            totalCount = list.total
+                            if reset { routes = list.data } else { routes += list.data }
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func fetchRoutes(reset: Bool) async {
+        await withCheckedContinuation { cont in
+            fetchRoutes(reset: reset)
+            cont.resume()
+        }
+    }
+
+    func addRoute(_ route: RouteItem) {
+        isLoading = true
+        let params: [String: Any?] = [
+            "route_name": route.route_name,
+            "route_gatewayid": route.route_gatewayid,
+            "route_matchtype": route.route_matchtype,
+            "route_matchvalue": route.route_matchvalue,
+            "route_enabled": route.route_enabled,
+            "route_priority": route.route_priority
+        ]
+        vm.post(path: "/route/add", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            showAddRoute = false
+                            Task { await refresh() }
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "添加失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func updateRoute(_ route: RouteItem) {
+        isLoading = true
+        let params: [String: Any?] = [
+            "route_id": route.route_id,
+            "route_name": route.route_name,
+            // route_gatewayid 不允许编辑时也可以传回原值
+            "route_gatewayid": route.route_gatewayid,
+            "route_matchtype": route.route_matchtype,
+            "route_matchvalue": route.route_matchvalue,
+            "route_enabled": route.route_enabled,
+            "route_priority": route.route_priority
+        ]
+        vm.post(path: "/route/update", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            editRoute = nil
+                            Task { await refresh() }
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "修改失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func deleteRoute(_ route: RouteItem) {
+        isLoading = true
+        let params: [String: Any?] = ["route_id": route.route_id]
+        vm.post(path: "/route/delete", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            Task { await refresh() }
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "删除失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
+// 添加/编辑路由页面；编辑时不可修改 route_gatewayid
+struct AddEditRouteView: View {
+    @ObservedObject var vm: LinPhoneViewModel
+    var route: RouteItem?
+    // 如果从网关页面添加，传入默认 gateway id
+    let defaultGatewayId: Int?
+    var onSave: (RouteItem) -> Void
+    var onCancel: () -> Void
+
+    @State private var routeId: Int = 0
+    @State private var routeName: String = ""
+    @State private var routeGatewayId: Int = 0
+    @State private var matchType: Int = 1
+    @State private var matchValue: String = ""
+    @State private var enabled: Int = 1
+    @State private var priority: Int? = nil
+    @State private var remark: String = ""
+
+    @State private var gateways: [GatewayItem] = []
+    @State private var isLoading = false
+    @State private var initialLoaded = false
+
+    var isEdit: Bool { route != nil }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Form {
+                    Section(header: Text("基本")) {
+                        TextField("名称", text: $routeName)
+                        // 网关：编辑时禁用选择
+                        Picker("网关", selection: $routeGatewayId) {
+                            ForEach(gateways, id: \.gateway_id) { gw in
+                                Text("\(gw.gateway_name) (\(gw.gateway_id))").tag(gw.gateway_id)
+                            }
+                        }
+                        .disabled(true) // 编辑时不可修改
+                        Picker("匹配类型", selection: $matchType) {
+                            Text("主叫前缀").tag(1)
+                            Text("被叫前缀").tag(2)
+                        }
+                        TextField("匹配值", text: $matchValue)
+                        Picker("状态", selection: $enabled) {
+                            Text("启用").tag(1)
+                            Text("禁用").tag(2)
+                        }
+                        TextField("优先级（可选）", text: Binding(
+                            get: { priority == nil ? "" : String(priority!) },
+                            set: { priority = Int($0) }
+                        ))
+                        .keyboardType(.numberPad)
+                    }
+                }
+
+                if isLoading {
+                    Color.black.opacity(0.12).ignoresSafeArea()
+                    ProgressView("加载中...").padding().background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemBackground)))
+                }
+            }
+            .navigationTitle(isEdit ? "编辑路由" : "添加路由")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { onCancel() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isEdit ? "保存" : "添加") {
+                        let newRoute = RouteItem(
+                            route_id: route?.route_id ?? 0,
+                            route_name: routeName.isEmpty ? nil : routeName,
+                            route_gatewayid: routeGatewayId,
+                            route_matchtype: matchType,
+                            route_matchvalue: matchValue,
+                            route_enabled: enabled,
+                            route_priority: priority,
+                            route_remark: remark.isEmpty ? nil : remark
+                        )
+                        onSave(newRoute)
+                    }
+                    .disabled(matchValue.isEmpty || routeGatewayId == 0)
+                }
+            }
+            .onAppear {
+                if !initialLoaded {
+                    initialLoaded = true
+                    fetchGateways()
+                    if isEdit { loadRouteInfo() }
+                    else if let def = defaultGatewayId { routeGatewayId = def }
+                }
+            }
+            .overlay(
+                Group {
+                    if let err = vm.errorMessage {
+                        ToastView(message: err).zIndex(200)
+                    }
+                }
+            )
+        }
+    }
+
+    func fetchGateways() {
+        isLoading = true
+        let params: [String: Any?] = ["page": 1, "limit": 1000]
+        vm.post(path: "/gateway/list", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let list = try JSONDecoder().decode(GatewayListResponse.self, from: data)
+                            gateways = list.data
+                            // 如果是新增并有默认 gateway id，则确保存在该 id
+                            if !isEdit, let def = defaultGatewayId, gateways.contains(where: { $0.gateway_id == def }) {
+                                routeGatewayId = def
+                            }
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func loadRouteInfo() {
+        guard let rid = route?.route_id else { return }
+        isLoading = true
+        let params: [String: Any?] = ["route_id": rid]
+        vm.post(path: "/route/info", body: params) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let data):
+                    do {
+                        let resp = try JSONDecoder().decode(CommonResponse.self, from: data)
+                        if resp.code == 1 {
+                            let info = try JSONDecoder().decode(RouteInfoResponse.self, from: data)
+                            let r = info.data
+                            routeId = r.route_id
+                            routeName = r.route_name ?? ""
+                            routeGatewayId = r.route_gatewayid
+                            matchType = r.route_matchtype
+                            matchValue = r.route_matchvalue
+                            enabled = r.route_enabled
+                            priority = r.route_priority
+                            remark = r.route_remark ?? ""
+                        } else {
+                            vm.errorMessage = resp.message
+                        }
+                    } catch {
+                        vm.errorMessage = "数据解析失败"
+                    }
+                case .failure(let error):
+                    vm.errorMessage = "网络错误: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
 
 
 
